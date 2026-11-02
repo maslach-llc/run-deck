@@ -38,6 +38,27 @@ Answer `y` to add the marketplace, then pick a scope (user is the usual one).
 
 Digits `1`–`9` run a command (or, once it has run, open its output) and `0` runs them all, from an empty prompt. The letter keys (`c` copy the block, `x` dismiss) need the band focused: `ctrl+x tab`, or a click. In the output pane: `r` run again, `f` ask Claude to fix, `q` or Esc close. `/deck show` brings a dismissed deck back, `/deck clear` drops it, `/deck` toggles the output pane.
 
+Bare digits only work while the prompt is empty. To press a row while you are typing, bind the mod's shortcut commands in `~/.claude/keybindings.json` (`/keybindings` opens it); Alt plus a digit is free in most terminals:
+
+```json
+{
+  "bindings": [
+    {
+      "context": "Chat",
+      "bindings": {
+        "meta+1": "command:deck-1",
+        "meta+2": "command:deck-2",
+        "meta+3": "command:deck-3",
+        "meta+0": "command:deck-all",
+        "meta+a": "command:deck-answer"
+      }
+    }
+  ]
+}
+```
+
+`deck-1` to `deck-9` press a row, `deck-all` runs everything pending, and `deck-answer` scrolls the transcript to where the last answer starts. Each also works typed as a slash command.
+
 ## Options
 
 Set in `/config` or at install time:
@@ -47,6 +68,8 @@ Set in `/config` or at install time:
 | `confirm` | `risky`, `always`, `never` | `risky` |
 | `output` | `on-demand` (pane only when you open it), `always` | `on-demand` |
 | `on_error` | `fix` (send to Claude now), `show` (open the output), `wait` | `fix` |
+| `background` | a color for the band and pane (`#11111b`, a theme name), empty for none | empty |
+| `jump_to_answer` | scroll to the start of the answer when a reply ends, where the terminal lets a plugin scroll | `true` |
 | `copy` | copy the whole block to the clipboard too | `false` |
 | `auto_continue` | send the results to Claude without waiting for your next prompt | `false` |
 

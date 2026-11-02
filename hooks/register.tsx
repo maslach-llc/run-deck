@@ -22,10 +22,20 @@ type Options = {
   onError: 'fix' | 'show' | 'wait'
   copy: boolean
   autoContinue: boolean
+  background: string
+  jumpToAnswer: boolean
 }
 
 // Module state: set again by register and session.start after a hot reload.
-let options: Options = { confirm: 'risky', output: 'on-demand', onError: 'fix', copy: false, autoContinue: false }
+let options: Options = {
+  confirm: 'risky',
+  output: 'on-demand',
+  onError: 'fix',
+  copy: false,
+  autoContinue: false,
+  background: '',
+  jumpToAnswer: true,
+}
 let sessionCwd = '.'
 let hasToolDeckThisTurn = false
 let isRunningAll = false
@@ -33,6 +43,12 @@ let isRunningAll = false
 // press (or run all) during the awaits before the state says "running"
 // cannot start the same command twice.
 const inFlight = new Set<string>()
+// The transcript rows of recent assistant text, by render instance, so the
+// start of the final answer can be scrolled to.
+let replyRows: { id: string; head: string }[] = []
+let answerRow: string | null = null
+
+const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 
 export const register: Register = (on, rawOptions) => {
   options = {
@@ -41,6 +57,8 @@ export const register: Register = (on, rawOptions) => {
     onError: pick(rawOptions.on_error, ['fix', 'show', 'wait'], 'fix'),
     copy: rawOptions.copy === true,
     autoContinue: rawOptions.auto_continue === true,
+    background: typeof rawOptions.background === 'string' ? rawOptions.background.trim() : '',
+    jumpToAnswer: rawOptions.jump_to_answer !== false,
   }
 
   // ---------------------------------------------------------------- session
@@ -96,6 +114,13 @@ export const register: Register = (on, rawOptions) => {
       description: 'Run deck: show the buttons again, clear them, or toggle the output pane',
       argumentHint: '[show|clear|output]',
     })
+    // One command per shortcut, so a keybinding (`command:deck-1`) can press a
+    // row while the prompt holds a draft, where a bare digit types instead.
+    for (const d of DIGITS) {
+      await $.command.register({ name: `deck-${d}`, description: `Run deck: press row ${d}`, immediate: true })
+    }
+    await $.command.register({ name: 'deck-all', description: 'Run deck: run all pending commands', immediate: true })
+    await $.command.register({ name: 'deck-answer', description: 'Scroll to the start of the last answer', immediate: true })
 
     return next(e)
   })
@@ -125,6 +150,15 @@ export const register: Register = (on, rawOptions) => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && !e.isAborted && e.answer.trim()) {
+      const head = headOf(e.answer)
+      answerRow = [...replyRows].reverse().find(r => head.startsWith(r.head) || r.head.startsWith(head))?.id ?? null
+      if (options.jumpToAnswer && answerRow) {
+        const target = answerRow
+        // Lands only where the surface lets a plugin scroll the transcript.
+        $.clock.after(300, () => void $.ui.scroll({ to: { requestId: target }, block: 'start' }))
+      }
+    }
     if (e.agentId || e.isAborted || hasToolDeckThisTurn) return next(e)
 
     const block = lastShellBlock(e.answer)
@@ -195,6 +229,41 @@ export const register: Register = (on, rawOptions) => {
     return { text: isOpen ? 'Output pane closed.' : 'Output pane opened.' }
   })
 
+  // ------------------------------------------------------- the answer rows
+
+  on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+    if (!e.props.isSummary) {
+      const head = headOf(e.props.text)
+      if (head) {
+        replyRows = [...replyRows.filter(r => r.id !== e.requestId), { id: e.requestId, head }].slice(-50)
+      }
+    }
+    return next(e)
+  })
+
+  // ------------------------------------------------------------ shortcuts
+
+  on('command.run', async ($, e, next) => {
+    const name = e.command
+    if (name === 'deck-all') {
+      await runAll($, undefined)
+      return {}
+    }
+    if (name === 'deck-answer') {
+      if (!answerRow) return { text: 'No answer to jump to yet.' }
+      const moved = await $.ui.scroll({ to: { requestId: answerRow }, block: 'start' })
+      return moved.deny ? { text: `Could not scroll: ${moved.deny}` } : {}
+    }
+    const row = /^deck-([1-9])$/.exec(name)
+    if (row) {
+      const current = await read($, deck)
+      const action = current?.actions[Number(row[1]) - 1]
+      if (action) await press($, action.id, undefined)
+      return {}
+    }
+    return next(e)
+  })
+
   // ------------------------------------------------------------ the band
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -208,7 +277,7 @@ export const register: Register = (on, rawOptions) => {
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
         <Box gap={1}>
           <Text bold>Run deck</Text>
           <Text dimColor>
@@ -434,7 +503,14 @@ async function dismiss($: EngineInterface) {
 }
 
 async function openPane($: EngineInterface, how: { focus: boolean }) {
-  await $.ui.open(how.focus ? { id: PANE, title: 'Run deck', focus: true, closeOnEscape: true } : { id: PANE, title: 'Run deck', closeOnEscape: true })
+  const base = options.background
+    ? { id: PANE, title: 'Run deck', closeOnEscape: true as const, backgroundColor: options.background }
+    : { id: PANE, title: 'Run deck', closeOnEscape: true as const }
+  await $.ui.open(how.focus ? { ...base, focus: true } : base)
+}
+
+function headOf(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 60)
 }
 
 async function showOutput($: EngineInterface, id: string, focus: boolean) {
@@ -454,7 +530,7 @@ function needsConfirm(a: Action): boolean {
   return a.risk === 'risky'
 }
 
-async function press($: EngineInterface, id: string, surface: Surface) {
+async function press($: EngineInterface, id: string, surface: Surface | undefined) {
   if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
@@ -483,7 +559,7 @@ async function press($: EngineInterface, id: string, surface: Surface) {
   await run($, action, surface)
 }
 
-async function rerun($: EngineInterface, id: string, surface: Surface) {
+async function rerun($: EngineInterface, id: string, surface: Surface | undefined) {
   if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
@@ -565,7 +641,7 @@ async function runShell($: EngineInterface, action: Action) {
   }
 }
 
-async function runAll($: EngineInterface, surface: Surface) {
+async function runAll($: EngineInterface, surface: Surface | undefined) {
   if (isRunningAll) return
   isRunningAll = true
   try {

@@ -126,3 +126,14 @@ test('run all runs each once and the deck clears after the results are sent', as
   expect(await after.find({ key: 'r1' })).toBeUndefined()
   await after.unmount()
 })
+
+test('a shortcut command presses its row while the prompt holds a draft', async ($, on) => {
+  const seen = stubEngine(on, [])
+  await start($)
+
+  await $.command.run({ command: 'deck-2', args: '' })
+  expect(seen.spawns).toEqual(['npm run build'])
+
+  await $.command.run({ command: 'deck-all', args: '' })
+  expect(seen.spawns).toEqual(['npm run build', 'npm test'])
+})
