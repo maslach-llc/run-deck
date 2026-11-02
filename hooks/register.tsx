@@ -4,34 +4,41 @@ import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 import type { Action, ActionKind, ActionRisk, Deck } from '../types'
 import { classifyKind, classifyRisk, lastShellBlock, parseBlock, shorten } from './parse'
 
-const PLUGIN = 'run-deck'
 const PANE = 'run-deck'
 const TOOL = 'request_user_action'
-const TOOL_NAME = `mcp__${PLUGIN}__${TOOL}`
-const MAX_LOG = 500
-const TAIL_LINES = 30
-const TAIL_CHARS = 4000
+const TOOL_NAME = 'mcp__run-deck__request_user_action'
+const OUTPUT_LINES = 300
+const TAIL_LINES = 40
+const TAIL_CHARS = 6000
 
-const deck = atom({ plugin: 'run-deck', key: 'deck' } as const, null, { shape: 'deck-1' })
-const log = atom({ plugin: 'run-deck', key: 'log' } as const, [], { shape: 'log-1' })
+const deck = atom({ plugin: 'run-deck', key: 'deck' } as const, null, { shape: 'deck-2' })
+const selected = atom({ plugin: 'run-deck', key: 'selected' } as const, null, { shape: 'selected-1' })
+
+type Surface = UiPressArgument['surface']
 
 type Options = {
   confirm: 'risky' | 'always' | 'never'
-  output: 'pane' | 'toast' | 'quiet'
+  output: 'on-demand' | 'always'
+  onError: 'fix' | 'show' | 'wait'
   copy: boolean
   autoContinue: boolean
 }
 
 // Module state: set again by register and session.start after a hot reload.
-let options: Options = { confirm: 'risky', output: 'pane', copy: false, autoContinue: false }
+let options: Options = { confirm: 'risky', output: 'on-demand', onError: 'fix', copy: false, autoContinue: false }
 let sessionCwd = '.'
 let hasToolDeckThisTurn = false
 let isRunningAll = false
+// Actions started and not yet finished. Checked synchronously so a second
+// press (or run all) during the awaits before the state says "running"
+// cannot start the same command twice.
+const inFlight = new Set<string>()
 
 export const register: Register = (on, rawOptions) => {
   options = {
     confirm: pick(rawOptions.confirm, ['risky', 'always', 'never'], 'risky'),
-    output: pick(rawOptions.output, ['pane', 'toast', 'quiet'], 'pane'),
+    output: pick(rawOptions.output, ['on-demand', 'always'], 'on-demand'),
+    onError: pick(rawOptions.on_error, ['fix', 'show', 'wait'], 'fix'),
     copy: rawOptions.copy === true,
     autoContinue: rawOptions.auto_continue === true,
   }
@@ -45,9 +52,10 @@ export const register: Register = (on, rawOptions) => {
       isDeferred: false,
       description:
         'Hand the user commands they must run themselves (interactive logins, things you cannot or should not run, manual steps). ' +
-        'They appear as numbered buttons above the prompt; the user presses a digit to run one, and each result (exit code, output tail) ' +
-        'reaches you with their next prompt. Call it once per reply, with every command, in execution order. ' +
-        'Still write the same commands in your reply so they are readable in the transcript.',
+        'They appear as numbered buttons above the prompt; the user presses a digit to run one. Results (exit code, output tail) reach you ' +
+        'with the user\'s next prompt, and a failed command is usually sent to you right away so you can fix it: when one fails, find the ' +
+        'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
+        'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -65,7 +73,8 @@ export const register: Register = (on, rawOptions) => {
                 kind: {
                   type: 'string',
                   enum: ['shell', 'interactive', 'manual'],
-                  description: 'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off.',
+                  description:
+                    'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off.',
                 },
                 risk: {
                   type: 'string',
@@ -102,8 +111,7 @@ export const register: Register = (on, rawOptions) => {
 
     hasToolDeckThisTurn = true
     const summary = typeof e.summary === 'string' && e.summary.trim() ? e.summary.trim() : `${actions.length} to run`
-    await update($, deck, () => ({ source: 'tool', summary, actions, isHidden: false }))
-    $.ui.status(`run deck: ${actions.length} to run`)
+    await replaceDeck($, { source: 'tool', summary, actions, isHidden: false })
 
     return {
       result: `Queued ${actions.length} action(s) as buttons above the user's prompt. Their results will arrive with the user's next prompt; do not wait for them now.`,
@@ -135,13 +143,12 @@ export const register: Register = (on, rawOptions) => {
       status: 'pending',
       isReported: false,
     }))
-    await update($, deck, () => ({
+    await replaceDeck($, {
       source: 'reply',
       summary: `${actions.length} command${actions.length === 1 ? '' : 's'} from the last reply`,
       actions,
       isHidden: false,
-    }))
-    $.ui.status(`run deck: ${actions.length} to run`)
+    })
     if (options.copy) void $.ui.copy({ text: block.endsWith('\n') ? block : `${block}\n` })
 
     return next(e)
@@ -160,9 +167,11 @@ export const register: Register = (on, rawOptions) => {
     const report = reportOf(current, finished)
     const entered = await next({ ...e, context: [...(e.context ?? []), report] })
     if (!entered.drop) {
-      await update($, deck, d =>
+      const after = await update($, deck, d =>
         d ? { ...d, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) } : d,
       )
+      // Everything ran and Claude has it: the deck has done its job.
+      if (after && after.actions.every(a => a.isReported)) await clearDeck($)
     }
 
     return entered
@@ -173,8 +182,7 @@ export const register: Register = (on, rawOptions) => {
   on('command.run', { command: 'deck' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'clear') {
-      await update($, deck, () => null)
-      $.ui.status(undefined)
+      await clearDeck($)
       return { text: 'Run deck cleared.' }
     }
     if (arg === 'show') {
@@ -183,7 +191,7 @@ export const register: Register = (on, rawOptions) => {
     }
     const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
     if (isOpen) await $.ui.close({ id: PANE })
-    else await $.ui.open({ id: PANE, title: 'Run deck' })
+    else await openPane($, { focus: false })
     return { text: isOpen ? 'Output pane closed.' : 'Output pane opened.' }
   })
 
@@ -196,6 +204,8 @@ export const register: Register = (on, rawOptions) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = Math.max(20, e.props.bodyColumns - 30)
     const done = current.actions.filter(a => a.status === 'done').length
+    const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
+    const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
 
     return (
       <Box flexDirection="column">
@@ -218,19 +228,20 @@ export const register: Register = (on, rawOptions) => {
           </Button>
         ))}
         <Box gap={2}>
-          <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
-            run all
-          </Button>
+          {hasPending && (
+            <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
+              run all
+            </Button>
+          )}
           <Button key="copy" plain hotkey="c" onPress={p => void $.ui.copy({ text: blockOf(current), surface: p.surface })}>
             copy
-          </Button>
-          <Button key="output" plain hotkey="o" onPress={() => void $.ui.open({ id: PANE, title: 'Run deck' })}>
-            output
           </Button>
           <Button key="dismiss" plain hotkey="x" role="dismiss" onPress={() => void dismiss($)}>
             dismiss
           </Button>
-          <Text dimColor>0 runs all from the prompt; ctrl+x tab for c, o, x</Text>
+          <Text dimColor>
+            {hasFinished ? 'press a finished row for its output' : hasPending ? '0 runs all' : ''}
+          </Text>
         </Box>
       </Box>
     )
@@ -239,19 +250,51 @@ export const register: Register = (on, rawOptions) => {
   // ------------------------------------------------------------ the pane
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const lines = await read($, log)
-    const room = Math.max(1, e.props.scroll.bodyRows - 1)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const current = await read($, deck)
+    const id = await read($, selected)
+    const action = current?.actions.find(a => a.id === id) ?? lastStarted(current)
+
+    if (!current || !action) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No command has run yet. Esc closes this pane.</Text>
+        </Box>
+      )
+    }
+
+    const lines = action.output ?? (action.tail ? action.tail.split('\n') : [])
+    const room = Math.max(1, e.props.scroll.bodyRows - 3)
     const shown = lines.slice(-room)
 
     return (
       <Box flexDirection="column">
-        {shown.length === 0 && <Text dimColor>No command has run yet.</Text>}
-        {shown.map(line => (
-          <Text wrap="truncate-end" dimColor={line.startsWith('[exit') || line.startsWith('[run-deck]')} bold={line.startsWith('$ ')}>
-            {line || ' '}
+        <Box gap={1}>
+          <Text bold>
+            {indexOf(current, action.id) + 1}. $ {shorten(action.command, Math.max(20, e.props.bodyColumns - 20))}
           </Text>
+          <Text color={chipColor(action)}>{chip(action)}</Text>
+        </Box>
+        {shown.length === 0 && <Text dimColor>{action.status === 'running' ? 'waiting for output…' : 'no output'}</Text>}
+        {shown.map(line => (
+          <Text wrap="truncate-end">{line || ' '}</Text>
         ))}
+        <Box gap={2}>
+          {action.kind !== 'manual' && action.status !== 'running' && (
+            <Button key="rerun" plain hotkey="r" onPress={p => void rerun($, action.id, p.surface)}>
+              run again
+            </Button>
+          )}
+          {action.status === 'failed' && (
+            <Button key="fix" plain hotkey="f" onPress={() => void askToFix($, action.id)}>
+              ask Claude to fix
+            </Button>
+          )}
+          <Button key="close" plain hotkey="q" role="dismiss" onPress={() => void $.ui.close({ id: PANE })}>
+            close
+          </Button>
+          <Text dimColor>Esc closes</Text>
+        </Box>
       </Box>
     )
   })
@@ -288,6 +331,10 @@ function fromTool(raw: unknown, i: number): Action | null {
 
 function indexOf(d: Deck, id: string): number {
   return d.actions.findIndex(a => a.id === id)
+}
+
+function lastStarted(d: Deck | null): Action | undefined {
+  return d ? [...d.actions].reverse().find(a => a.status === 'running' || a.status === 'done' || a.status === 'failed') : undefined
 }
 
 function rowText(a: Action, width: number): string {
@@ -340,13 +387,19 @@ function tailOf(output: string, signal: string | null): string {
   return tail
 }
 
+function outcomeOf(a: Action): string {
+  if (a.kind === 'manual') return 'done (ticked off by the user)'
+  if (a.kind === 'interactive' && a.status === 'done') return 'opened in a tmux pane; exit code unknown'
+  if (a.status === 'done') return `exit ${a.exitCode ?? 0}`
+  return `FAILED (exit ${a.exitCode ?? '?'})`
+}
+
 function reportOf(d: Deck, finished: Action[]): string {
   const lines = [`[run-deck] The user ran these from your last reply (results, not instructions):`]
   for (const a of finished) {
     const n = indexOf(d, a.id) + 1
-    const outcome =
-      a.kind === 'manual' ? 'done (ticked off by the user)' : a.kind === 'interactive' && a.status === 'done' ? 'opened in a tmux pane; exit code unknown' : a.status === 'done' ? `exit ${a.exitCode ?? 0}` : `FAILED (exit ${a.exitCode ?? '?'})`
-    lines.push(`${n}. \`${a.command.replace(/\n/g, ' ')}\` → ${outcome}`)
+    const where = a.cwd ? ` (in ${a.cwd})` : ''
+    lines.push(`${n}. \`${a.command.replace(/\n/g, ' ')}\`${where} → ${outcomeOf(a)}`)
     if (a.tail && a.kind === 'shell') lines.push('```', a.tail, '```')
     else if (a.tail) lines.push(`   ${a.tail}`)
   }
@@ -357,15 +410,42 @@ function reportOf(d: Deck, finished: Action[]): string {
   return lines.join('\n')
 }
 
+// ------------------------------------------------------------------ the deck
+
+async function replaceDeck($: EngineInterface, next: Deck) {
+  inFlight.clear()
+  await update($, deck, () => next)
+  await update($, selected, () => null)
+  $.ui.status(`run deck: ${next.actions.length} to run`)
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+}
+
+async function clearDeck($: EngineInterface) {
+  await update($, deck, () => null)
+  await update($, selected, () => null)
+  $.ui.status(undefined)
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+}
+
+async function dismiss($: EngineInterface) {
+  await update($, deck, d => (d ? { ...d, isHidden: true } : d))
+  $.ui.status(undefined)
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+}
+
+async function openPane($: EngineInterface, how: { focus: boolean }) {
+  await $.ui.open(how.focus ? { id: PANE, title: 'Run deck', focus: true, closeOnEscape: true } : { id: PANE, title: 'Run deck', closeOnEscape: true })
+}
+
+async function showOutput($: EngineInterface, id: string, focus: boolean) {
+  await update($, selected, () => id)
+  await openPane($, { focus })
+}
+
 // ------------------------------------------------------------------ running
 
 async function setAction($: EngineInterface, id: string, change: (a: Action) => Action) {
   await update($, deck, d => (d ? { ...d, actions: d.actions.map(a => (a.id === id ? change(a) : a)) } : d))
-}
-
-async function appendLog($: EngineInterface, text: string) {
-  const lines = text.split('\n')
-  await update($, log, l => [...l, ...lines].slice(-MAX_LOG))
 }
 
 function needsConfirm(a: Action): boolean {
@@ -374,7 +454,8 @@ function needsConfirm(a: Action): boolean {
   return a.risk === 'risky'
 }
 
-async function press($: EngineInterface, id: string, surface: UiPressArgument['surface']) {
+async function press($: EngineInterface, id: string, surface: Surface) {
+  if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
   if (!action || action.status === 'running') return
@@ -382,6 +463,12 @@ async function press($: EngineInterface, id: string, surface: UiPressArgument['s
   if (action.kind === 'manual') {
     await setAction($, id, a => ({ ...a, status: a.status === 'done' ? 'pending' : 'done', tail: 'the user ticked it off' }))
     await afterChange($)
+    return
+  }
+
+  // A finished row opens its output; the pane's "run again" reruns it.
+  if (action.status === 'done' || action.status === 'failed') {
+    await showOutput($, id, true)
     return
   }
 
@@ -396,15 +483,27 @@ async function press($: EngineInterface, id: string, surface: UiPressArgument['s
   await run($, action, surface)
 }
 
-async function run($: EngineInterface, action: Action, surface?: UiPressArgument['surface']) {
-  if (action.kind === 'interactive') {
-    await runInteractive($, action, surface)
-    return
-  }
-  await runShell($, action)
+async function rerun($: EngineInterface, id: string, surface: Surface) {
+  if (inFlight.has(id)) return
+  const current = await read($, deck)
+  const action = current?.actions.find(a => a.id === id)
+  if (!action || action.kind === 'manual') return
+  await setAction($, id, a => ({ ...a, isReported: false }))
+  await run($, action, surface)
 }
 
-async function runInteractive($: EngineInterface, action: Action, surface?: UiPressArgument['surface']) {
+async function run($: EngineInterface, action: Action, surface?: Surface) {
+  if (inFlight.has(action.id)) return
+  inFlight.add(action.id)
+  try {
+    if (action.kind === 'interactive') await runInteractive($, action, surface)
+    else await runShell($, action)
+  } finally {
+    inFlight.delete(action.id)
+  }
+}
+
+async function runInteractive($: EngineInterface, action: Action, surface?: Surface) {
   const cwd = await resolveCwd($, action.cwd)
   const inTmux = Boolean(await $.env.get('TMUX'))
   if (!inTmux) {
@@ -415,9 +514,9 @@ async function runInteractive($: EngineInterface, action: Action, surface?: UiPr
   const made = await $.process.run(['tmux', 'split-window', '-v', '-l', '40%', '-c', cwd, '-P', '-F', '#{pane_id}'])
   const paneId = made.stdout.trim()
   if (made.exitCode !== 0 || !paneId) {
-    await setAction($, action.id, a => ({ ...a, status: 'failed', exitCode: made.exitCode, tail: made.stderr.trim() || 'tmux split-window failed' }))
-    $.ui.toast(`tmux split failed: ${made.stderr.trim()}`)
-    await afterChange($)
+    const reason = made.stderr.trim() || 'tmux split-window failed'
+    await setAction($, action.id, a => ({ ...a, status: 'failed', exitCode: made.exitCode, tail: reason, output: [reason] }))
+    await afterFailure($, action.id)
     return
   }
   await $.process.run(['tmux', 'send-keys', '-t', paneId, action.command, 'Enter'])
@@ -428,9 +527,8 @@ async function runInteractive($: EngineInterface, action: Action, surface?: UiPr
 async function runShell($: EngineInterface, action: Action) {
   const shell = (await $.env.get('SHELL')) || '/bin/bash'
   const cwd = await resolveCwd($, action.cwd)
-  await setAction($, action.id, a => ({ ...a, status: 'running', exitCode: undefined, tail: undefined }))
-  await appendLog($, `$ ${action.command}`)
-  if (options.output === 'pane') void $.ui.open({ id: PANE, title: 'Run deck' })
+  await setAction($, action.id, a => ({ ...a, status: 'running', exitCode: undefined, tail: undefined, output: [] }))
+  if (options.output === 'always') await showOutput($, action.id, false)
 
   let output = ''
   let ended: { code: number | null; signal: string | null }
@@ -444,36 +542,36 @@ async function runShell($: EngineInterface, action: Action) {
         break
       }
       output += step.value.text
-      await appendLog($, step.value.text.replace(/\n$/, ''))
+      const lines = output.replace(/\n$/, '').split('\n').slice(-OUTPUT_LINES)
+      await setAction($, action.id, a => ({ ...a, output: lines }))
       chunks = child.next()
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    await appendLog($, `[run-deck] could not start: ${reason}`)
-    await setAction($, action.id, a => ({ ...a, status: 'failed', exitCode: null, tail: reason }))
-    $.ui.toast(`✗ ${shorten(action.command, 40)}: ${reason}`)
-    await afterChange($)
+    await setAction($, action.id, a => ({ ...a, status: 'failed', exitCode: null, tail: `could not start: ${reason}`, output: [`could not start: ${reason}`] }))
+    await afterFailure($, action.id)
     return
   }
 
   const code = ended.code
   const isOk = code === 0
   const tail = tailOf(output, ended.signal)
-  await appendLog($, isOk ? `[exit 0]` : `[exit ${code ?? ended.signal ?? '?'}]`)
   await setAction($, action.id, a => ({ ...a, status: isOk ? 'done' : 'failed', exitCode: code, tail }))
-  if (options.output !== 'quiet') {
-    $.ui.toast(isOk ? `✓ ${shorten(action.command, 50)}` : `✗ ${shorten(action.command, 50)} (exit ${code ?? ended.signal})`)
+  if (isOk) {
+    $.ui.toast(`✓ ${shorten(action.command, 50)}`, { timeoutMs: 2500 })
+    await afterChange($)
+  } else {
+    await afterFailure($, action.id)
   }
-  await afterChange($)
 }
 
-async function runAll($: EngineInterface, surface: UiPressArgument['surface']) {
+async function runAll($: EngineInterface, surface: Surface) {
   if (isRunningAll) return
   isRunningAll = true
   try {
     for (;;) {
       const current = await read($, deck)
-      const nextUp = current?.actions.find(a => a.status === 'pending' && a.kind !== 'manual')
+      const nextUp = current?.actions.find(a => a.status === 'pending' && a.kind !== 'manual' && !inFlight.has(a.id))
       if (!nextUp) break
       if (needsConfirm(nextUp)) {
         await setAction($, nextUp.id, a => ({ ...a, status: 'armed' }))
@@ -482,26 +580,61 @@ async function runAll($: EngineInterface, surface: UiPressArgument['surface']) {
       }
       await run($, nextUp, surface)
       const after = await read($, deck)
-      if (after?.actions.find(a => a.id === nextUp.id)?.status === 'failed') {
-        $.ui.toast('Run all stopped at the first failure')
-        break
-      }
+      if (after?.actions.find(a => a.id === nextUp.id)?.status === 'failed') break
     }
   } finally {
     isRunningAll = false
   }
+  await afterChange($)
+}
+
+async function afterFailure($: EngineInterface, id: string) {
+  const current = await read($, deck)
+  const action = current?.actions.find(a => a.id === id)
+  if (!current || !action) return
+  const n = indexOf(current, id) + 1
+
+  if (options.onError === 'fix') {
+    $.ui.toast(`✗ ${n} failed (exit ${action.exitCode ?? '?'}): sent to Claude`, { timeoutMs: 4000 })
+    await askToFix($, id)
+    return
+  }
+  if (options.onError === 'show') {
+    await showOutput($, id, false)
+  } else {
+    $.ui.toast(`✗ ${n} failed (exit ${action.exitCode ?? '?'}): press ${n} for the output`)
+  }
+  await afterChange($)
+}
+
+async function askToFix($: EngineInterface, id: string) {
+  const current = await read($, deck)
+  const action = current?.actions.find(a => a.id === id)
+  if (!current || !action) return
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+  $.ui.status(undefined)
+  // A plugin's own prompt carries no context, so the results go in its text,
+  // and are marked reported so the next prompt does not send them again.
+  const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
+  await update($, deck, d =>
+    d ? { ...d, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) } : d,
+  )
+  void $.prompt.submit({
+    text:
+      `Command ${indexOf(current, id) + 1} from the run deck failed: \`${shorten(action.command, 120)}\` (exit ${action.exitCode ?? '?'}). ` +
+      'Find the cause, fix what you can yourself, and hand me only the commands I still need to run with request_user_action.\n\n' +
+      reportOf(current, finished),
+  })
 }
 
 async function afterChange($: EngineInterface) {
   const current = await read($, deck)
   if (!current) return
   const left = current.actions.filter(a => a.status === 'pending' || a.status === 'armed' || a.status === 'running').length
-  const failed = current.actions.filter(a => a.status === 'failed').length
   $.ui.status(left > 0 ? `run deck: ${left} to run` : undefined)
 
-  const isSettled = left === 0 || (failed > 0 && !isRunningAll)
   const hasUnreported = current.actions.some(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
-  if (options.autoContinue && isSettled && hasUnreported && !current.isContinued) {
+  if (options.autoContinue && left === 0 && !isRunningAll && hasUnreported && !current.isContinued) {
     await update($, deck, d => (d ? { ...d, isContinued: true } : d))
     void $.prompt.submit({ text: 'The commands from your last reply have run; the results are attached. Continue.' })
   }
@@ -515,9 +648,3 @@ async function resolveCwd($: EngineInterface, cwd: string | undefined): Promise<
   }
   return base
 }
-
-async function dismiss($: EngineInterface) {
-  await update($, deck, d => (d ? { ...d, isHidden: true } : d))
-  $.ui.status(undefined)
-}
-

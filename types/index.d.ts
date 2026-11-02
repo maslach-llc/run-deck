@@ -12,6 +12,9 @@ export type Action = {
   cwd?: string
   status: ActionStatus
   exitCode?: number | null
+  /** The last lines the command wrote, for the output pane. */
+  output?: string[]
+  /** What Claude is told: the tail of the output, or a note. */
   tail?: string
   isReported: boolean
 }
@@ -28,7 +31,8 @@ declare module 'claude-code' {
   interface PluginState {
     'run-deck': {
       deck: Shaped<Deck | null>
-      log: Shaped<string[]>
+      /** The action whose output the pane shows. */
+      selected: Shaped<string | null>
     }
   }
 }

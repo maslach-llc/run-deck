@@ -1,6 +1,6 @@
 {
   "name": "run-deck",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Turns the commands Claude asks you to run into numbered buttons above the prompt: press a digit to run one, see the exit code, and the output rides back to Claude with your next prompt.",
   "author": {
     "name": "Maslach LLC",
@@ -32,14 +32,24 @@
     },
     "output": {
       "type": "string",
-      "title": "Where command output goes",
-      "description": "A pane that opens while a command runs, a toast with the exit code only, or nothing on screen (the result still reaches Claude)",
+      "title": "Output pane",
+      "description": "on-demand: the pane opens when you press a finished row (or on a failure, with on_error show); always: it opens while every command runs",
       "options": [
-        "pane",
-        "toast",
-        "quiet"
+        "on-demand",
+        "always"
       ],
-      "default": "pane"
+      "default": "on-demand"
+    },
+    "on_error": {
+      "type": "string",
+      "title": "When a command fails",
+      "description": "fix: send the output to Claude right away to fix; show: open the output pane; wait: mark the row and send the result with your next prompt",
+      "options": [
+        "fix",
+        "show",
+        "wait"
+      ],
+      "default": "fix"
     },
     "copy": {
       "type": "boolean",

@@ -2,14 +2,14 @@
 
 Buttons above the Claude Code prompt for the commands Claude asks you to run yourself.
 
-When a reply ends with a ```bash block, or when Claude calls the `request_user_action` tool, each command becomes a numbered row above the prompt. Press its digit at an empty prompt and the command runs on your machine; the exit code shows on the row, the output streams into a pane, and the result rides along with your next prompt so Claude sees what happened without you pasting anything.
+When a reply ends with a ```bash block, or when Claude calls the `request_user_action` tool, each command becomes a numbered row above the prompt. Press its digit at an empty prompt and the command runs on your machine; the exit code shows on the row and the result rides along with your next prompt, so Claude sees what happened without you pasting anything. When a command fails, its output goes to Claude straight away to fix. Nothing pops up when things work: press a finished row to see its output.
 
 ```
  Run deck  3 commands from the last reply · 1/3 done
  1: gh auth login                                tmux
  2: npm run build                                ✓ exit 0
  3: git push origin main                         risky
- 0: run all   c: copy   o: output   x: dismiss
+ 0: run all   c: copy   x: dismiss   press a finished row for its output
 ```
 
 ## Install
@@ -29,11 +29,14 @@ Answer `y` to add the marketplace, then pick a scope (user is the usual one).
 - Three kinds. `shell` runs in the background with the output captured. `interactive` (logins, editors, anything that needs the keyboard) opens a tmux split with the command typed, or copies the command when there is no tmux. `manual` is a step outside the terminal; pressing it ticks it off.
 - Risky commands (`rm -r`, `git push`, `sudo`, anything with `prod` in it, force flags, destroy/deploy verbs and the like) need a second press. The `confirm` option makes that always or never.
 - `run all` runs the pending shell commands in order and stops at the first failure or the first risky one.
+- A failed command, with `on_error` at `fix` (the default), is sent to Claude at once with its output and a request to fix what it can and hand back only what you still need to run. `show` opens the output pane instead; `wait` marks the row and sends the result with your next prompt.
+- Output stays out of the way: pressing a finished row opens a pane with that command's output, `r` runs it again, `f` asks Claude to fix it, and Esc closes it. With `output` at `always` the pane opens while every command runs.
+- Once every result has reached Claude, the deck clears itself.
 - On your next prompt, finished actions are attached as context for Claude: the command, the exit code and the last 30 lines of output. With `auto_continue` on, the mod sends that prompt itself as soon as every command has run.
 
 ## Keys
 
-Digits `1`–`9` run a command and `0` runs them all, from an empty prompt. The letter keys (`c` copy the block, `o` output pane, `x` dismiss) need the band focused: `ctrl+x tab`, or a click. `/deck show` brings a dismissed deck back, `/deck clear` drops it, `/deck` toggles the output pane.
+Digits `1`–`9` run a command (or, once it has run, open its output) and `0` runs them all, from an empty prompt. The letter keys (`c` copy the block, `x` dismiss) need the band focused: `ctrl+x tab`, or a click. In the output pane: `r` run again, `f` ask Claude to fix, `q` or Esc close. `/deck show` brings a dismissed deck back, `/deck clear` drops it, `/deck` toggles the output pane.
 
 ## Options
 
@@ -42,7 +45,8 @@ Set in `/config` or at install time:
 | Option | Values | Default |
 | --- | --- | --- |
 | `confirm` | `risky`, `always`, `never` | `risky` |
-| `output` | `pane`, `toast`, `quiet` | `pane` |
+| `output` | `on-demand` (pane only when you open it), `always` | `on-demand` |
+| `on_error` | `fix` (send to Claude now), `show` (open the output), `wait` | `fix` |
 | `copy` | copy the whole block to the clipboard too | `false` |
 | `auto_continue` | send the results to Claude without waiting for your next prompt | `false` |
 
