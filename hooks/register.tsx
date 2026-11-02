@@ -93,14 +93,16 @@ export const register: Register = (on, rawOptions) => {
                 label: { type: 'string', description: 'Short label, e.g. "Log in to GitHub".' },
                 command: {
                   type: 'string',
-                  description: 'The shell command; for kind "manual" the step to take; for kind "slash" the slash command with its arguments.',
+                  description:
+                    'The shell command; for kind "manual" the step to take; for kind "slash" the slash command with its arguments; for kind "reply" the prompt text it sends.',
                 },
                 kind: {
                   type: 'string',
-                  enum: ['shell', 'interactive', 'manual', 'slash'],
+                  enum: ['shell', 'interactive', 'manual', 'slash', 'reply'],
                   description:
                     'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off. ' +
-                    'slash: a Claude Code slash command run in this session, such as /clear when the work is finished and what comes next is unrelated, or /compact with what to keep; list it last.',
+                    'slash: a Claude Code slash command run in this session, such as /clear when the work is finished and what comes next is unrelated, or /compact with what to keep; list it last. ' +
+                    "reply: a go-ahead the user can send with one press, e.g. 'yes: fix the blintz bug'; the command is the prompt text.",
                 },
                 risk: {
                   type: 'string',
@@ -286,7 +288,7 @@ export const register: Register = (on, rawOptions) => {
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
-    const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash' && needsConfirm(a))
+    const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -359,12 +361,13 @@ export const register: Register = (on, rawOptions) => {
       )
     }
 
-    // The details: the whole command (or manual step) and its why, wrapped, never cut.
+    // The details: the whole command (or manual step, or reply) and its why, wrapped, never cut.
     const at = indexOf(current, action.id)
     const cols = Math.max(20, e.props.bodyColumns)
     const isManual = action.kind === 'manual'
-    const head = isManual ? action.label : `$ ${action.command}`
-    const body = isManual && action.command !== action.label ? action.command : ''
+    const isText = isManual || action.kind === 'reply'
+    const head = isText ? action.label : `$ ${action.command}`
+    const body = isText && action.command !== action.label ? action.command : ''
     const headRows = [head, body, action.why ?? '', action.cwd ? `in ${action.cwd}` : ''].reduce((n, t) => n + (t ? Math.ceil((t.length + 4) / cols) : 0), 0)
     const lines = action.output ?? (action.tail ? action.tail.split('\n') : [])
     const hasRun = action.status === 'running' || action.status === 'done' || action.status === 'failed'
@@ -387,15 +390,15 @@ export const register: Register = (on, rawOptions) => {
           </Text>
         )}
         {action.cwd && <Text dimColor wrap="wrap">in {action.cwd}</Text>}
-        {!isManual && hasRun && shown.length === 0 && <Text dimColor>{action.status === 'running' ? 'waiting for output…' : 'no output'}</Text>}
-        {!isManual && hasRun && shown.map(line => <Text wrap="truncate-end">{line || ' '}</Text>)}
+        {!isText && hasRun && shown.length === 0 && <Text dimColor>{action.status === 'running' ? 'waiting for output…' : 'no output'}</Text>}
+        {!isText && hasRun && shown.map(line => <Text wrap="truncate-end">{line || ' '}</Text>)}
         <Box gap={2}>
           {isManual && (
             <Button key="tick" plain hotkey="d" onPress={() => void tick($, action.id)}>
               {action.status === 'done' ? 'mark not done' : 'mark done'}
             </Button>
           )}
-          {!isManual && action.kind !== 'slash' && hasRun && action.status !== 'running' && (
+          {isRunnable(action) && hasRun && action.status !== 'running' && (
             <Button key="rerun" plain hotkey="r" onPress={p => void rerun($, action.id, p.surface)}>
               run again
             </Button>
@@ -436,7 +439,7 @@ function fromTool(raw: unknown, i: number): Action | null {
   const r = raw as Record<string, unknown>
   const command = typeof r.command === 'string' ? r.command.trim() : ''
   if (!command) return null
-  const kinds: ActionKind[] = ['shell', 'interactive', 'manual', 'slash']
+  const kinds: ActionKind[] = ['shell', 'interactive', 'manual', 'slash', 'reply']
   const risks: ActionRisk[] = ['safe', 'risky']
   const kind = kinds.includes(r.kind as ActionKind) ? (r.kind as ActionKind) : classifyKind(command)
   // /clear throws the conversation away, so it always takes a second press.
@@ -464,7 +467,14 @@ function lastStarted(d: Deck | null): Action | undefined {
   return d ? [...d.actions].reverse().find(a => a.status === 'running' || a.status === 'done' || a.status === 'failed') : undefined
 }
 
+// Shell and interactive commands run on the machine; manual steps, slash
+// commands and replies are pressed one by one, never by run all.
+function isRunnable(a: Action): boolean {
+  return a.kind === 'shell' || a.kind === 'interactive'
+}
+
 function rowText(a: Action, width: number): string {
+  if (a.kind === 'reply') return shorten(a.label, width)
   const text = a.kind === 'manual' || a.label !== shorten(a.command) ? `${a.label}: ${a.command}` : a.command
   return shorten(text, width)
 }
@@ -479,12 +489,13 @@ function chip(a: Action): string {
     case 'running':
       return 'running…'
     case 'done':
-      return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : a.kind === 'slash' ? '✓ ran' : '✓ done'
+      return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : a.kind === 'slash' ? '✓ ran' : a.kind === 'reply' ? '✓ sent' : '✓ done'
     case 'failed':
       return (a.kind === 'slash' ? '✗ failed' : `✗ exit ${a.exitCode ?? '?'}`).slice(0, STATUS_WIDTH)
     default:
       if (a.kind === 'interactive') return 'opens tmux'
       if (a.kind === 'manual') return 'to do'
+      if (a.kind === 'reply') return 'sends it'
       return a.risk === 'risky' ? 'not run ⚠' : 'not run'
   }
 }
@@ -500,7 +511,7 @@ function blockOf(d: Deck): string {
   const lines: string[] = []
   let cwd: string | undefined
   for (const a of d.actions) {
-    if (a.kind === 'manual' || a.kind === 'slash') continue
+    if (!isRunnable(a)) continue
     if (a.cwd !== cwd) {
       cwd = a.cwd
       if (cwd) lines.push(`cd ${cwd}`)
@@ -522,6 +533,7 @@ function tailOf(output: string, signal: string | null): string {
 function outcomeOf(a: Action): string {
   if (a.kind === 'manual') return 'done (ticked off by the user)'
   if (a.kind === 'slash') return a.status === 'done' ? 'ran' : `failed: ${a.tail ?? 'unknown'}`
+  if (a.kind === 'reply') return 'sent as the user\'s prompt'
   if (a.kind === 'interactive' && a.status === 'done') return 'opened in a tmux pane; exit code unknown'
   if (a.status === 'done') return `exit ${a.exitCode ?? 0}`
   return `FAILED (exit ${a.exitCode ?? '?'})`
@@ -536,7 +548,7 @@ function reportOf(d: Deck, finished: Action[]): string {
     if (a.tail && a.kind === 'shell') lines.push('```', a.tail, '```')
     else if (a.tail) lines.push(`   ${a.tail}`)
   }
-  const notRun = d.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'slash')
+  const notRun = d.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'slash' && a.kind !== 'reply')
   if (notRun.length > 0) {
     lines.push(`Not run yet: ${notRun.map(a => `${indexOf(d, a.id) + 1} (\`${shorten(a.command, 40)}\`)`).join(', ')}.`)
   }
@@ -680,7 +692,7 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
     return
   }
 
-  if (action.kind === 'slash' && action.status === 'done') return
+  if ((action.kind === 'slash' || action.kind === 'reply') && action.status === 'done') return
   // A finished row opens its output; the pane's "run again" reruns it.
   if (action.status === 'done' || action.status === 'failed') {
     await showOutput($, id, true)
@@ -726,7 +738,7 @@ async function rerun($: EngineInterface, id: string, surface: Surface | undefine
   if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
-  if (!action || action.kind === 'manual' || action.kind === 'slash') return
+  if (!action || !isRunnable(action)) return
   await setAction($, id, a => ({ ...a, isReported: false }))
   await run($, action, surface)
 }
@@ -737,6 +749,7 @@ async function run($: EngineInterface, action: Action, surface?: Surface) {
   try {
     if (action.kind === 'interactive') await runInteractive($, action, surface)
     else if (action.kind === 'slash') await runSlash($, action)
+    else if (action.kind === 'reply') await sendReply($, action)
     else await runShell($, action)
   } finally {
     inFlight.delete(action.id)
@@ -794,6 +807,33 @@ async function runSlash($: EngineInterface, action: Action) {
   )
 }
 
+// A reply is the user's go-ahead: its text goes in as their prompt. A
+// plugin's own prompt carries no context, so any results not yet sent ride
+// along in its text, and everything in it is marked reported.
+async function sendReply($: EngineInterface, action: Action) {
+  const current = await read($, deck)
+  if (!current) return
+  const finished = current.actions.filter(a => a.id !== action.id && !a.isReported && (a.status === 'done' || a.status === 'failed'))
+  await update($, deck, d =>
+    d
+      ? {
+          ...d,
+          actions: d.actions.map(a =>
+            a.id === action.id
+              ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
+              : finished.some(f => f.id === a.id)
+                ? { ...a, isReported: true }
+                : a,
+          ),
+        }
+      : d,
+  )
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+  const text = finished.length > 0 ? `${action.command}\n\n${reportOf(current, finished)}` : action.command
+  void $.prompt.submit({ text })
+  await afterChange($)
+}
+
 async function runShell($: EngineInterface, action: Action) {
   const shell = (await $.env.get('SHELL')) || '/bin/bash'
   const cwd = await resolveCwd($, action.cwd)
@@ -842,7 +882,7 @@ async function runAll($: EngineInterface, surface: Surface | undefined) {
   if (isRunningAll) return
   const current = await read($, deck)
   if (!current) return
-  const pending = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash')
+  const pending = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a))
   if (pending.length === 0) return
 
   if (!current.isAllArmed && pending.some(needsConfirm)) {
@@ -859,7 +899,7 @@ async function runAll($: EngineInterface, surface: Surface | undefined) {
     for (;;) {
       const now = await read($, deck)
       const nextUp = now?.actions.find(
-        a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash' && !inFlight.has(a.id),
+        a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && !inFlight.has(a.id),
       )
       if (!nextUp) break
       await run($, nextUp, surface)
@@ -914,7 +954,7 @@ async function askToFix($: EngineInterface, id: string) {
 async function afterChange($: EngineInterface) {
   const current = await read($, deck)
   if (!current) return
-  const left = current.actions.filter(a => a.kind !== 'slash' && (a.status === 'pending' || a.status === 'armed' || a.status === 'running')).length
+  const left = current.actions.filter(a => a.kind !== 'slash' && a.kind !== 'reply' && (a.status === 'pending' || a.status === 'armed' || a.status === 'running')).length
   $.ui.status(left > 0 ? `run deck: ${left} to run` : undefined)
 
   const hasUnreported = current.actions.some(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))

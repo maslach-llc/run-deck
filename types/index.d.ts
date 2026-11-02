@@ -1,4 +1,4 @@
-export type ActionKind = 'shell' | 'interactive' | 'manual' | 'slash'
+export type ActionKind = 'shell' | 'interactive' | 'manual' | 'slash' | 'reply'
 export type ActionRisk = 'safe' | 'risky'
 export type ActionStatus = 'pending' | 'armed' | 'running' | 'done' | 'failed'
 
