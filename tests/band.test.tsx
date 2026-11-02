@@ -50,7 +50,15 @@ test('a reply ending in a bash block becomes buttons on every surface', async ($
   }
 })
 
-test('a manual action ticks off on press and is reported with the next prompt', async ($, on) => {
+const PANE = {
+  plugin: 'run-deck',
+  component: 'Pane',
+  requestId: 'run-deck',
+  surface: 'terminal',
+  props: { title: 'Run deck', isFocused: true, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
+
+test('a manual action opens its details on press, ticks off with d and is reported with the next prompt', async ($, on) => {
   let context: readonly string[] | undefined
   stubEngine(on, on => {
     on('prompt.submit', (_: any, e: any) => {
@@ -70,6 +78,13 @@ test('a manual action ticks off on press and is reported with the next prompt', 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /Finish the setup/ }))?.text).toContain('Finish the setup')
   await ui.press({ key: 't1' })
+  expect((await ui.find({ key: 't1' }))?.text).toContain('to do')
+
+  const pane = await $.ui.mount(PANE)
+  expect((await pane.find({ type: 'Text', text: /enable the Maps API/ }))?.text).toBe('Open the console and enable the Maps API')
+  await pane.press({ key: 'tick' })
+  await pane.unmount()
+
   expect((await ui.find({ key: 't1' }))?.text).toContain('done')
   await ui.unmount()
 
@@ -103,4 +118,34 @@ test('a dismissed deck shrinks to one row and /deck show brings it back', async 
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ key: 'r1' })).toBeDefined()
   await ui.unmount()
+})
+
+test('details shows the whole command and its why, and steps through the rows', async ($, on) => {
+  stubEngine(on, on => on('tool.call', () => ({ result: {} })))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const long = 'glab api -X POST projects/cindev%2Fcindev.com/variables -f key=GH_READ_TOKEN -F masked=true -F masked_and_hidden=true -F protected=true'
+  await $.tool.call({
+    tool: 'mcp__run-deck__request_user_action',
+    summary: 'Set the token',
+    actions: [
+      { label: 'Store the token', command: long, kind: 'shell', why: 'Release builds need it to fetch the UI library' },
+      { label: 'Check it', command: 'glab api projects/cindev%2Fcindev.com/variables', kind: 'shell' },
+    ],
+  })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ key: 't1' }))?.text).not.toContain('masked_and_hidden=true -F protected=true')
+  await ui.press({ key: 'details' })
+  await ui.unmount()
+
+  const pane = await $.ui.mount(PANE)
+  expect((await pane.find({ type: 'Text', text: /GH_READ_TOKEN/ }))?.text).toContain('-F protected=true')
+  expect((await pane.find({ type: 'Text', text: /^why: / }))?.text).toBe('why: Release builds need it to fetch the UI library')
+  expect(await pane.find({ key: 'rerun' })).toBeUndefined()
+  await pane.press({ key: 'next' })
+  expect((await pane.find({ type: 'Text', text: /variables$/ }))?.text).toContain('2. $ glab api projects/cindev%2Fcindev.com/variables')
+  await pane.press({ key: 'next' })
+  expect((await pane.find({ type: 'Text', text: /GH_READ_TOKEN/ }))?.text).toContain('1. $ ')
+  await pane.unmount()
 })

@@ -324,6 +324,9 @@ export const register: Register = (on, rawOptions) => {
               )}
             </Button>
           )}
+          <Button key="details" plain hotkey="i" onPress={() => void showDetails($)}>
+            details
+          </Button>
           <Button key="copy" plain hotkey="c" onPress={p => void $.ui.copy({ text: blockOf(current), surface: p.surface })}>
             copy
           </Button>
@@ -346,34 +349,53 @@ export const register: Register = (on, rawOptions) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const current = await read($, deck)
     const id = await read($, selected)
-    const action = current?.actions.find(a => a.id === id) ?? lastStarted(current)
+    const action = current?.actions.find(a => a.id === id) ?? lastStarted(current) ?? current?.actions[0]
 
     if (!current || !action) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>No command has run yet. Esc closes this pane.</Text>
+          <Text dimColor>No commands yet. Esc closes this pane.</Text>
         </Box>
       )
     }
 
+    // The details: the whole command (or manual step) and its why, wrapped, never cut.
+    const at = indexOf(current, action.id)
+    const cols = Math.max(20, e.props.bodyColumns)
+    const isManual = action.kind === 'manual'
+    const head = isManual ? action.label : `$ ${action.command}`
+    const body = isManual && action.command !== action.label ? action.command : ''
+    const headRows = [head, body, action.why ?? '', action.cwd ? `in ${action.cwd}` : ''].reduce((n, t) => n + (t ? Math.ceil((t.length + 4) / cols) : 0), 0)
     const lines = action.output ?? (action.tail ? action.tail.split('\n') : [])
-    const room = Math.max(1, e.props.scroll.bodyRows - 3)
+    const hasRun = action.status === 'running' || action.status === 'done' || action.status === 'failed'
+    const room = Math.max(1, e.props.scroll.bodyRows - 2 - headRows)
     const shown = lines.slice(-room)
+    const hasSiblings = current.actions.length > 1
 
     return (
       <Box flexDirection="column">
         <Box gap={1}>
-          <Text bold>
-            {indexOf(current, action.id) + 1}. $ {shorten(action.command, Math.max(20, e.props.bodyColumns - 20))}
+          <Text bold wrap="wrap">
+            {at + 1}. {head}
           </Text>
           <Text color={chipColor(action)}>{chip(action)}</Text>
         </Box>
-        {shown.length === 0 && <Text dimColor>{action.status === 'running' ? 'waiting for output…' : 'no output'}</Text>}
-        {shown.map(line => (
-          <Text wrap="truncate-end">{line || ' '}</Text>
-        ))}
+        {body && <Text wrap="wrap">{body}</Text>}
+        {action.why && (
+          <Text dimColor wrap="wrap">
+            why: {action.why}
+          </Text>
+        )}
+        {action.cwd && <Text dimColor wrap="wrap">in {action.cwd}</Text>}
+        {!isManual && hasRun && shown.length === 0 && <Text dimColor>{action.status === 'running' ? 'waiting for output…' : 'no output'}</Text>}
+        {!isManual && hasRun && shown.map(line => <Text wrap="truncate-end">{line || ' '}</Text>)}
         <Box gap={2}>
-          {action.kind !== 'manual' && action.kind !== 'slash' && action.status !== 'running' && (
+          {isManual && (
+            <Button key="tick" plain hotkey="d" onPress={() => void tick($, action.id)}>
+              {action.status === 'done' ? 'mark not done' : 'mark done'}
+            </Button>
+          )}
+          {!isManual && action.kind !== 'slash' && hasRun && action.status !== 'running' && (
             <Button key="rerun" plain hotkey="r" onPress={p => void rerun($, action.id, p.surface)}>
               run again
             </Button>
@@ -381,6 +403,16 @@ export const register: Register = (on, rawOptions) => {
           {action.status === 'failed' && (
             <Button key="fix" plain hotkey="f" onPress={() => void askToFix($, action.id)}>
               ask Claude to fix
+            </Button>
+          )}
+          {hasSiblings && (
+            <Button key="prev" plain hotkey="p" onPress={() => void step($, -1)}>
+              previous
+            </Button>
+          )}
+          {hasSiblings && (
+            <Button key="next" plain hotkey="n" onPress={() => void step($, 1)}>
+              next
             </Button>
           )}
           <Button key="close" plain hotkey="q" role="dismiss" onPress={() => void $.ui.close({ id: PANE })}>
@@ -642,9 +674,9 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
   const action = current?.actions.find(a => a.id === id)
   if (!action || action.status === 'running') return
 
+  // A manual step is read before it is done: its row opens the details, where `d` ticks it off.
   if (action.kind === 'manual') {
-    await setAction($, id, a => ({ ...a, status: a.status === 'done' ? 'pending' : 'done', tail: 'the user ticked it off' }))
-    await afterChange($)
+    await showOutput($, id, true)
     return
   }
 
@@ -664,6 +696,30 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
   }
 
   await run($, action, surface)
+}
+
+async function tick($: EngineInterface, id: string) {
+  await setAction($, id, a => ({ ...a, status: a.status === 'done' ? 'pending' : 'done', tail: 'the user ticked it off' }))
+  await afterChange($)
+}
+
+// The pane's previous / next: walk the deck's rows, wrapping at either end.
+async function step($: EngineInterface, by: 1 | -1) {
+  const current = await read($, deck)
+  if (!current || current.actions.length === 0) return
+  const id = await read($, selected)
+  const shown = current.actions.find(a => a.id === id) ?? lastStarted(current) ?? current.actions[0]
+  const n = current.actions.length
+  const to = shown && current.actions[(indexOf(current, shown.id) + by + n) % n]
+  if (to) await update($, selected, () => to.id)
+}
+
+// The band's `i`: the details of the first row still to do, else the first row.
+async function showDetails($: EngineInterface) {
+  const current = await read($, deck)
+  if (!current || current.actions.length === 0) return
+  const first = current.actions.find(a => a.status === 'pending' || a.status === 'armed') ?? current.actions[0]
+  if (first) await showOutput($, first.id, true)
 }
 
 async function rerun($: EngineInterface, id: string, surface: Surface | undefined) {
