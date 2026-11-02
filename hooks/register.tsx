@@ -288,20 +288,23 @@ export const register: Register = (on, rawOptions) => {
       )
     }
 
-    const width = Math.max(20, e.props.bodyColumns - 30)
+    // Room for a row's text: the band less its padding, the `1: ` hotkey mark,
+    // the space and the status chip, so nothing wraps onto a second line.
+    const roomFor = (a: Action) => Math.max(12, e.props.bodyColumns - 2 - 3 - 1 - chip(a).length)
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
-        <Box gap={1}>
+        <Text wrap="truncate-end">
           <Text bold>Run deck</Text>
           <Text dimColor>
+            {' · '}
             {current.summary}
             {done > 0 ? ` · ${done}/${current.actions.length} done` : ''}
           </Text>
-        </Box>
+        </Text>
         {current.actions.map((a, i) => (
           <Button
             key={a.id}
@@ -310,7 +313,7 @@ export const register: Register = (on, rawOptions) => {
             dimColor={a.status === 'done'}
             onPress={p => void press($, a.id, p.surface)}
           >
-            {rowText(a, width)} <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe'}>{chip(a)}</Text>
+            {rowText(a, roomFor(a))} <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe'}>{chip(a)}</Text>
           </Button>
         ))}
         <Box gap={2}>
@@ -325,9 +328,11 @@ export const register: Register = (on, rawOptions) => {
           <Button key="dismiss" plain hotkey="x" role="dismiss" onPress={() => void dismiss($)}>
             dismiss
           </Button>
-          <Text dimColor>
-            {hasFinished ? 'press a finished row for its output' : hasPending ? '0 runs all' : ''}
-          </Text>
+          {hasFinished && (
+            <Text dimColor wrap="truncate-end">
+              finished row: its output
+            </Text>
+          )}
         </Box>
       </Box>
     )
