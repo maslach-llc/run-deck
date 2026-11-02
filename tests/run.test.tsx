@@ -137,3 +137,22 @@ test('a shortcut command presses its row while the prompt holds a draft', async 
   await $.command.run({ command: 'deck-all', args: '' })
   expect(seen.spawns).toEqual(['npm run build', 'npm test'])
 })
+
+test('deck-hide hides the band and brings it back', async ($, on) => {
+  stubEngine(on, [])
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  await start($)
+
+  await $.command.run({ command: 'deck-hide', args: '' })
+  let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'r1' })).toBeUndefined()
+  await ui.unmount()
+
+  await $.command.run({ command: 'deck-hide', args: '' })
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'r1' })).toBeDefined()
+  await ui.unmount()
+})

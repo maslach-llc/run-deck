@@ -50,6 +50,7 @@ Bare digits only work while the prompt is empty. To press a row while you are ty
         "meta+2": "command:deck-2",
         "meta+3": "command:deck-3",
         "meta+0": "command:deck-all",
+        "meta+h": "command:deck-hide",
         "meta+a": "command:deck-answer"
       }
     }
@@ -57,7 +58,7 @@ Bare digits only work while the prompt is empty. To press a row while you are ty
 }
 ```
 
-`deck-1` to `deck-9` press a row, `deck-all` runs everything pending, and `deck-answer` scrolls the transcript to where the last answer starts. Each also works typed as a slash command.
+`deck-1` to `deck-9` press a row, `deck-all` runs everything pending, `deck-hide` hides the band or brings it back, and `deck-answer` scrolls the transcript to where the last answer starts. Each also works typed as a slash command.
 
 ## Options
 
@@ -69,7 +70,6 @@ Set in `/config` or at install time:
 | `output` | `on-demand` (pane only when you open it), `always` | `on-demand` |
 | `on_error` | `fix` (send to Claude now), `show` (open the output), `wait` | `fix` |
 | `background` | a color for the band and pane (`#11111b`, a theme name), empty for none | empty |
-| `jump_to_answer` | scroll to the start of the answer when a reply ends, where the terminal lets a plugin scroll | `true` |
 | `copy` | copy the whole block to the clipboard too | `false` |
 | `auto_continue` | send the results to Claude without waiting for your next prompt | `false` |
 

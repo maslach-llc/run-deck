@@ -68,12 +68,6 @@
       "title": "Band background",
       "description": "A color for the band and the output pane, a hex like #11111b or a theme name; empty keeps the terminal's",
       "default": ""
-    },
-    "jump_to_answer": {
-      "type": "boolean",
-      "title": "Jump to the start of the answer",
-      "description": "When a reply ends, scroll the transcript to where its answer starts (where the terminal allows a plugin to scroll; /deck-answer or its key always can)",
-      "default": true
     }
   }
 }

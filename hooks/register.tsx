@@ -23,7 +23,6 @@ type Options = {
   copy: boolean
   autoContinue: boolean
   background: string
-  jumpToAnswer: boolean
 }
 
 // Module state: set again by register and session.start after a hot reload.
@@ -34,7 +33,6 @@ let options: Options = {
   copy: false,
   autoContinue: false,
   background: '',
-  jumpToAnswer: true,
 }
 let sessionCwd = '.'
 let hasToolDeckThisTurn = false
@@ -58,7 +56,6 @@ export const register: Register = (on, rawOptions) => {
     copy: rawOptions.copy === true,
     autoContinue: rawOptions.auto_continue === true,
     background: typeof rawOptions.background === 'string' ? rawOptions.background.trim() : '',
-    jumpToAnswer: rawOptions.jump_to_answer !== false,
   }
 
   // ---------------------------------------------------------------- session
@@ -121,6 +118,7 @@ export const register: Register = (on, rawOptions) => {
     }
     await $.command.register({ name: 'deck-all', description: 'Run deck: run all pending commands', immediate: true })
     await $.command.register({ name: 'deck-answer', description: 'Scroll to the start of the last answer', immediate: true })
+    await $.command.register({ name: 'deck-hide', description: 'Run deck: hide the band, or show it again', immediate: true })
 
     return next(e)
   })
@@ -153,11 +151,6 @@ export const register: Register = (on, rawOptions) => {
     if (!e.agentId && !e.isAborted && e.answer.trim()) {
       const head = headOf(e.answer)
       answerRow = [...replyRows].reverse().find(r => head.startsWith(r.head) || r.head.startsWith(head))?.id ?? null
-      if (options.jumpToAnswer && answerRow) {
-        const target = answerRow
-        // Lands only where the surface lets a plugin scroll the transcript.
-        $.clock.after(300, () => void $.ui.scroll({ to: { requestId: target }, block: 'start' }))
-      }
     }
     if (e.agentId || e.isAborted || hasToolDeckThisTurn) return next(e)
 
@@ -247,6 +240,13 @@ export const register: Register = (on, rawOptions) => {
     const name = e.command
     if (name === 'deck-all') {
       await runAll($, undefined)
+      return {}
+    }
+    if (name === 'deck-hide') {
+      const current = await read($, deck)
+      if (!current) return { text: 'No run deck to hide.' }
+      if (current.isHidden) await update($, deck, d => (d ? { ...d, isHidden: false } : d))
+      else await dismiss($)
       return {}
     }
     if (name === 'deck-answer') {
