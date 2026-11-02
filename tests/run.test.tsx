@@ -28,6 +28,7 @@ function stubEngine(on: any, fail: string[]): Seen {
   on('turn.start', () => ({}))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('ui.status', () => ({ value: undefined }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, tokens: 20000, percent: 10 }, rateLimits: [] } }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.copy', () => ({ value: { isCopied: true } }))
   on('ui.open', (_: any, e: any) => {

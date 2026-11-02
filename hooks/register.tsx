@@ -23,6 +23,8 @@ type Options = {
   copy: boolean
   autoContinue: boolean
   background: string
+  /** Context fill, in percent, at which a finished turn offers /clear; 0 never. */
+  suggestClear: number
 }
 
 // Module state: set again by register and session.start after a hot reload.
@@ -33,6 +35,7 @@ let options: Options = {
   copy: false,
   autoContinue: false,
   background: '',
+  suggestClear: 60,
 }
 let sessionCwd = '.'
 let hasToolDeckThisTurn = false
@@ -58,6 +61,7 @@ export const register: Register = (on, rawOptions) => {
     copy: rawOptions.copy === true,
     autoContinue: rawOptions.auto_continue === true,
     background: typeof rawOptions.background === 'string' ? rawOptions.background.trim() : '',
+    suggestClear: typeof rawOptions.suggest_clear === 'number' ? Math.max(0, Math.min(100, rawOptions.suggest_clear)) : 60,
   }
 
   // ---------------------------------------------------------------- session
@@ -87,12 +91,16 @@ export const register: Register = (on, rawOptions) => {
               type: 'object',
               properties: {
                 label: { type: 'string', description: 'Short label, e.g. "Log in to GitHub".' },
-                command: { type: 'string', description: 'The shell command, or for kind "manual" the step to take.' },
+                command: {
+                  type: 'string',
+                  description: 'The shell command; for kind "manual" the step to take; for kind "slash" the slash command with its arguments.',
+                },
                 kind: {
                   type: 'string',
-                  enum: ['shell', 'interactive', 'manual'],
+                  enum: ['shell', 'interactive', 'manual', 'slash'],
                   description:
-                    'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off.',
+                    'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off. ' +
+                    'slash: a Claude Code slash command run in this session, such as /clear when the work is finished and what comes next is unrelated, or /compact with what to keep; list it last.',
                 },
                 risk: {
                   type: 'string',
@@ -151,35 +159,13 @@ export const register: Register = (on, rawOptions) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (!e.agentId && !e.isAborted && e.answer.trim()) {
+    if (e.agentId || e.isAborted) return next(e)
+    if (e.answer.trim()) {
       const head = headOf(e.answer)
       answerRow = [...replyRows].reverse().find(r => head.startsWith(r.head) || r.head.startsWith(head))?.id ?? null
     }
-    if (e.agentId || e.isAborted || hasToolDeckThisTurn) return next(e)
-
-    const block = lastShellBlock(e.answer)
-    if (block === null) return next(e)
-
-    const parsed = parseBlock(block)
-    if (parsed.length === 0) return next(e)
-
-    const actions: Action[] = parsed.map((p, i) => ({
-      id: `r${i + 1}`,
-      label: p.label,
-      command: p.command,
-      cwd: p.cwd,
-      kind: p.kind,
-      risk: p.risk,
-      status: 'pending',
-      isReported: false,
-    }))
-    await replaceDeck($, {
-      source: 'reply',
-      summary: `${actions.length} command${actions.length === 1 ? '' : 's'} from the last reply`,
-      actions,
-      isHidden: false,
-    })
-    if (options.copy) void $.ui.copy({ text: block.endsWith('\n') ? block : `${block}\n` })
+    if (!hasToolDeckThisTurn) await deckFromReply($, e.answer)
+    await suggestClear($)
 
     return next(e)
   })
@@ -188,7 +174,13 @@ export const register: Register = (on, rawOptions) => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.command) return next(e)
-    const current = await read($, deck)
+    // A new prompt instead of /clear: the offer is withdrawn, and made again
+    // at the end of the turn while the context is still that full.
+    let current = await update($, deck, d => (d ? { ...d, actions: d.actions.filter(a => a.id !== CLEAR_ID) } : d))
+    if (current && current.actions.length === 0) {
+      await clearDeck($)
+      current = null
+    }
     if (!current) return next(e)
 
     const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
@@ -294,7 +286,7 @@ export const register: Register = (on, rawOptions) => {
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
-    const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && needsConfirm(a))
+    const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash' && needsConfirm(a))
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -381,7 +373,7 @@ export const register: Register = (on, rawOptions) => {
           <Text wrap="truncate-end">{line || ' '}</Text>
         ))}
         <Box gap={2}>
-          {action.kind !== 'manual' && action.status !== 'running' && (
+          {action.kind !== 'manual' && action.kind !== 'slash' && action.status !== 'running' && (
             <Button key="rerun" plain hotkey="r" onPress={p => void rerun($, action.id, p.surface)}>
               run again
             </Button>
@@ -412,10 +404,12 @@ function fromTool(raw: unknown, i: number): Action | null {
   const r = raw as Record<string, unknown>
   const command = typeof r.command === 'string' ? r.command.trim() : ''
   if (!command) return null
-  const kinds: ActionKind[] = ['shell', 'interactive', 'manual']
+  const kinds: ActionKind[] = ['shell', 'interactive', 'manual', 'slash']
   const risks: ActionRisk[] = ['safe', 'risky']
   const kind = kinds.includes(r.kind as ActionKind) ? (r.kind as ActionKind) : classifyKind(command)
-  const risk = risks.includes(r.risk as ActionRisk) ? (r.risk as ActionRisk) : classifyRisk(command)
+  // /clear throws the conversation away, so it always takes a second press.
+  const isClear = kind === 'slash' && /^\/clear\b/.test(command)
+  const risk = isClear ? 'risky' : risks.includes(r.risk as ActionRisk) ? (r.risk as ActionRisk) : classifyRisk(command)
 
   return {
     id: `t${i + 1}`,
@@ -453,9 +447,9 @@ function chip(a: Action): string {
     case 'running':
       return 'running…'
     case 'done':
-      return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : '✓ done'
+      return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : a.kind === 'slash' ? '✓ ran' : '✓ done'
     case 'failed':
-      return `✗ exit ${a.exitCode ?? '?'}`.slice(0, STATUS_WIDTH)
+      return (a.kind === 'slash' ? '✗ failed' : `✗ exit ${a.exitCode ?? '?'}`).slice(0, STATUS_WIDTH)
     default:
       if (a.kind === 'interactive') return 'opens tmux'
       if (a.kind === 'manual') return 'to do'
@@ -474,7 +468,7 @@ function blockOf(d: Deck): string {
   const lines: string[] = []
   let cwd: string | undefined
   for (const a of d.actions) {
-    if (a.kind === 'manual') continue
+    if (a.kind === 'manual' || a.kind === 'slash') continue
     if (a.cwd !== cwd) {
       cwd = a.cwd
       if (cwd) lines.push(`cd ${cwd}`)
@@ -495,6 +489,7 @@ function tailOf(output: string, signal: string | null): string {
 
 function outcomeOf(a: Action): string {
   if (a.kind === 'manual') return 'done (ticked off by the user)'
+  if (a.kind === 'slash') return a.status === 'done' ? 'ran' : `failed: ${a.tail ?? 'unknown'}`
   if (a.kind === 'interactive' && a.status === 'done') return 'opened in a tmux pane; exit code unknown'
   if (a.status === 'done') return `exit ${a.exitCode ?? 0}`
   return `FAILED (exit ${a.exitCode ?? '?'})`
@@ -509,7 +504,7 @@ function reportOf(d: Deck, finished: Action[]): string {
     if (a.tail && a.kind === 'shell') lines.push('```', a.tail, '```')
     else if (a.tail) lines.push(`   ${a.tail}`)
   }
-  const notRun = d.actions.filter(a => a.status === 'pending' || a.status === 'armed')
+  const notRun = d.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'slash')
   if (notRun.length > 0) {
     lines.push(`Not run yet: ${notRun.map(a => `${indexOf(d, a.id) + 1} (\`${shorten(a.command, 40)}\`)`).join(', ')}.`)
   }
@@ -517,6 +512,61 @@ function reportOf(d: Deck, finished: Action[]): string {
 }
 
 // ------------------------------------------------------------------ the deck
+
+const CLEAR_ID = 'clear'
+
+async function deckFromReply($: EngineInterface, answer: string) {
+  const block = lastShellBlock(answer)
+  if (block === null) return
+  const parsed = parseBlock(block)
+  if (parsed.length === 0) return
+
+  const actions: Action[] = parsed.map((p, i) => ({
+    id: `r${i + 1}`,
+    label: p.label,
+    command: p.command,
+    cwd: p.cwd,
+    kind: p.kind,
+    risk: p.risk,
+    status: 'pending',
+    isReported: false,
+  }))
+  await replaceDeck($, {
+    source: 'reply',
+    summary: `${actions.length} command${actions.length === 1 ? '' : 's'} from the last reply`,
+    actions,
+    isHidden: false,
+  })
+  if (options.copy) void $.ui.copy({ text: block.endsWith('\n') ? block : `${block}\n` })
+}
+
+// At the end of a turn with nothing left to run and the context past the
+// threshold, the deck offers /clear as its last row. It is never reported to
+// Claude, and a new prompt withdraws it.
+async function suggestClear($: EngineInterface) {
+  if (options.suggestClear <= 0) return
+  const current = await read($, deck)
+  const hasWork = current?.actions.some(a => a.id !== CLEAR_ID && (a.status === 'pending' || a.status === 'armed' || a.status === 'running'))
+  if (hasWork || current?.actions.some(a => a.kind === 'slash' && /^\/clear\b/.test(a.command))) return
+
+  const { context } = await $.session.usage()
+  if (context.percent === undefined || context.percent < options.suggestClear) return
+
+  const offer: Action = {
+    id: CLEAR_ID,
+    label: `Context ${context.percent}% full`,
+    command: '/clear',
+    kind: 'slash',
+    risk: 'risky',
+    status: 'pending',
+    isReported: true,
+  }
+  await update($, deck, (d): Deck =>
+    d
+      ? { ...d, isHidden: false, actions: [...d.actions, offer] }
+      : { source: 'reply', summary: 'nothing left to run', actions: [offer], isHidden: false },
+  )
+}
 
 async function replaceDeck($: EngineInterface, next: Deck) {
   inFlight.clear()
@@ -598,6 +648,7 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
     return
   }
 
+  if (action.kind === 'slash' && action.status === 'done') return
   // A finished row opens its output; the pane's "run again" reruns it.
   if (action.status === 'done' || action.status === 'failed') {
     await showOutput($, id, true)
@@ -619,7 +670,7 @@ async function rerun($: EngineInterface, id: string, surface: Surface | undefine
   if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
-  if (!action || action.kind === 'manual') return
+  if (!action || action.kind === 'manual' || action.kind === 'slash') return
   await setAction($, id, a => ({ ...a, isReported: false }))
   await run($, action, surface)
 }
@@ -629,6 +680,7 @@ async function run($: EngineInterface, action: Action, surface?: Surface) {
   inFlight.add(action.id)
   try {
     if (action.kind === 'interactive') await runInteractive($, action, surface)
+    else if (action.kind === 'slash') await runSlash($, action)
     else await runShell($, action)
   } finally {
     inFlight.delete(action.id)
@@ -654,6 +706,36 @@ async function runInteractive($: EngineInterface, action: Action, surface?: Surf
   await $.process.run(['tmux', 'send-keys', '-t', paneId, action.command, 'Enter'])
   await setAction($, action.id, a => ({ ...a, status: 'done', tail: `ran in a tmux pane (${paneId}); output not captured` }))
   await afterChange($)
+}
+
+// A slash command runs in this session once it is idle. /clear ends the
+// conversation the deck belongs to, so the deck goes first.
+async function runSlash($: EngineInterface, action: Action) {
+  const m = /^\/([\w:-]+)\s*([\s\S]*)$/.exec(action.command.trim())
+  if (!m) {
+    await setAction($, action.id, a => ({ ...a, status: 'failed', tail: 'not a slash command', output: ['not a slash command'] }))
+    await afterChange($)
+    return
+  }
+  const command = m[1] ?? ''
+  const args = m[2] ?? ''
+  if (command === 'clear') await clearDeck($)
+  else await setAction($, action.id, a => ({ ...a, status: 'running' }))
+
+  void $.command.run({ command, args }).then(
+    async () => {
+      if (command === 'clear') return
+      await setAction($, action.id, a => ({ ...a, status: 'done', tail: 'ran' }))
+      await afterChange($)
+    },
+    async (error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error)
+      $.ui.toast(`✗ ${action.command}: ${reason}`)
+      if (command === 'clear') return
+      await setAction($, action.id, a => ({ ...a, status: 'failed', tail: reason, output: [reason] }))
+      await afterChange($)
+    },
+  )
 }
 
 async function runShell($: EngineInterface, action: Action) {
@@ -704,7 +786,7 @@ async function runAll($: EngineInterface, surface: Surface | undefined) {
   if (isRunningAll) return
   const current = await read($, deck)
   if (!current) return
-  const pending = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual')
+  const pending = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash')
   if (pending.length === 0) return
 
   if (!current.isAllArmed && pending.some(needsConfirm)) {
@@ -720,7 +802,9 @@ async function runAll($: EngineInterface, surface: Surface | undefined) {
   try {
     for (;;) {
       const now = await read($, deck)
-      const nextUp = now?.actions.find(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && !inFlight.has(a.id))
+      const nextUp = now?.actions.find(
+        a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && a.kind !== 'slash' && !inFlight.has(a.id),
+      )
       if (!nextUp) break
       await run($, nextUp, surface)
       const after = await read($, deck)
@@ -774,7 +858,7 @@ async function askToFix($: EngineInterface, id: string) {
 async function afterChange($: EngineInterface) {
   const current = await read($, deck)
   if (!current) return
-  const left = current.actions.filter(a => a.status === 'pending' || a.status === 'armed' || a.status === 'running').length
+  const left = current.actions.filter(a => a.kind !== 'slash' && (a.status === 'pending' || a.status === 'armed' || a.status === 'running')).length
   $.ui.status(left > 0 ? `run deck: ${left} to run` : undefined)
 
   const hasUnreported = current.actions.some(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
