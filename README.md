@@ -5,10 +5,10 @@ Buttons above the Claude Code prompt for the commands Claude asks you to run you
 When a reply ends with a ```bash block, or when Claude calls the `request_user_action` tool, each command becomes a numbered row above the prompt. Press its digit at an empty prompt and the command runs on your machine; the exit code shows on the row and the result rides along with your next prompt, so Claude sees what happened without you pasting anything. When a command fails, its output goes to Claude straight away to fix. Nothing pops up when things work: press a finished row to see its output.
 
 ```
- Run deck  3 commands from the last reply · 1/3 done
- 1: gh auth login                                tmux
- 2: npm run build                                ✓ exit 0
- 3: git push origin main                         risky
+ Run deck · 3 commands from the last reply · 1/3 done
+ 1: opens tmux  gh auth login
+ 2: ✓ exit 0    npm run build
+ 3: not run ⚠   git push origin main
  0: run all   c: copy   x: dismiss   press a finished row for its output
 ```
 

@@ -290,7 +290,7 @@ export const register: Register = (on, rawOptions) => {
 
     // Room for a row's text: the band less its padding, the `1: ` hotkey mark,
     // the space and the status chip, so nothing wraps onto a second line.
-    const roomFor = (a: Action) => Math.max(12, e.props.bodyColumns - 2 - 3 - 1 - chip(a).length)
+    const room = Math.max(12, e.props.bodyColumns - 2 - 3 - STATUS_WIDTH - 1)
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
@@ -313,7 +313,10 @@ export const register: Register = (on, rawOptions) => {
             dimColor={a.status === 'done'}
             onPress={p => void press($, a.id, p.surface)}
           >
-            {rowText(a, roomFor(a))} <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe'}>{chip(a)}</Text>
+            <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe' && a.kind === 'shell'}>
+              {chip(a).padEnd(STATUS_WIDTH)}
+            </Text>{' '}
+            {rowText(a, room)}
           </Button>
         ))}
         <Box gap={2}>
@@ -433,18 +436,23 @@ function rowText(a: Action, width: number): string {
   return shorten(text, width)
 }
 
+// The status column: every label fits in STATUS_WIDTH, so commands line up.
+const STATUS_WIDTH = 11
+
 function chip(a: Action): string {
   switch (a.status) {
     case 'armed':
-      return 'press again to run'
+      return 'press again'
     case 'running':
       return 'running…'
     case 'done':
       return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : '✓ done'
     case 'failed':
-      return `✗ exit ${a.exitCode ?? '?'}`
+      return `✗ exit ${a.exitCode ?? '?'}`.slice(0, STATUS_WIDTH)
     default:
-      return a.kind === 'interactive' ? 'tmux' : a.kind === 'manual' ? 'manual' : a.risk === 'risky' ? 'risky' : ''
+      if (a.kind === 'interactive') return 'opens tmux'
+      if (a.kind === 'manual') return 'to do'
+      return a.risk === 'risky' ? 'not run ⚠' : 'not run'
   }
 }
 

@@ -44,7 +44,7 @@ test('a reply ending in a bash block becomes buttons on every surface', async ($
     const second = await ui.find({ key: 'r2' })
     expect(first?.text).toContain('npm run build')
     expect(second?.text).toContain('git push origin main')
-    expect(second?.text).toContain('risky')
+    expect(second?.text).toContain('not run ⚠')
     await ui.unmount()
   }
 })
