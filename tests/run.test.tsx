@@ -37,6 +37,7 @@ function stubEngine(on: any, fail: string[]): Seen {
   on('ui.close', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [] }))
   on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
   on('prompt.submit', (_: any, e: any) => {
     seen.prompts.push({ text: e.text, context: e.context })
     return { text: e.text }
@@ -149,6 +150,7 @@ test('deck-hide hides the band and brings it back', async ($, on) => {
   await $.command.run({ command: 'deck-hide', args: '' })
   let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ key: 'r1' })).toBeUndefined()
+  expect((await ui.find({ key: 'unhide' }))?.text).toContain('2 to run')
   await ui.unmount()
 
   await $.command.run({ command: 'deck-hide', args: '' })

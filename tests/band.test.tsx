@@ -24,6 +24,7 @@ function stubEngine(on: any, extra: (on: any) => void = () => {}) {
   on('turn.start', () => ({}))
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('ui.status', () => ({ value: undefined }))
+  on('env.get', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.copy', () => ({ value: { isCopied: true } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -77,7 +78,7 @@ test('a manual action ticks off on press and is reported with the next prompt', 
   expect(context?.[0]).toContain('ticked off')
 })
 
-test('a dismissed deck draws nothing and /deck show brings it back', async ($, on) => {
+test('a dismissed deck shrinks to one row and /deck show brings it back', async ($, on) => {
   stubEngine(on, on => {
     on('ui.render', ($: any, e: any) => {
       const { Text } = $.ui.resolve(e)
@@ -93,7 +94,8 @@ test('a dismissed deck draws nothing and /deck show brings it back', async ($, o
   await ui.unmount()
 
   ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
+  expect(await ui.find({ key: 'r1' })).toBeUndefined()
+  expect((await ui.find({ key: 'unhide' }))?.text).toContain('Run deck hidden')
   await ui.unmount()
 
   await $.command.run({ command: 'deck', args: 'show' })

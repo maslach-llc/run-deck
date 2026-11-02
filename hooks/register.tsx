@@ -45,6 +45,8 @@ const inFlight = new Set<string>()
 // start of the final answer can be scrolled to.
 let replyRows: { id: string; head: string }[] = []
 let answerRow: string | null = null
+// The key the person bound to `command:deck-hide`, for the hidden deck's row.
+let hideKey: string | null = null
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 
@@ -62,6 +64,7 @@ export const register: Register = (on, rawOptions) => {
 
   on('session.start', async ($, e, next) => {
     sessionCwd = e.cwd
+    hideKey = await boundKey($, 'command:deck-hide')
     await $.tool.register({
       name: TOOL,
       isDeferred: false,
@@ -268,9 +271,23 @@ export const register: Register = (on, rawOptions) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, deck)
-    if (e.props.hasSurvey || !current || current.isHidden || current.actions.length === 0) return next(e)
+    if (e.props.hasSurvey || !current || current.actions.length === 0) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
+
+    if (current.isHidden) {
+      const left = current.actions.filter(a => a.status === 'pending' || a.status === 'armed' || a.status === 'running').length
+      const failed = current.actions.filter(a => a.status === 'failed').length
+      const counts = [left > 0 ? `${left} to run` : '', failed > 0 ? `${failed} failed` : ''].filter(Boolean).join(', ')
+      return (
+        <Box paddingX={1} backgroundColor={options.background || undefined}>
+          <Button key="unhide" plain dimColor onPress={() => void update($, deck, d => (d ? { ...d, isHidden: false } : d))}>
+            Run deck hidden{counts ? ` · ${counts}` : ''} · {hideKey ? `${hideKey} shows it` : '/deck-hide shows it'}
+          </Button>
+        </Box>
+      )
+    }
+
     const width = Math.max(20, e.props.bodyColumns - 30)
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
@@ -507,6 +524,25 @@ async function openPane($: EngineInterface, how: { focus: boolean }) {
     ? { id: PANE, title: 'Run deck', closeOnEscape: true as const, backgroundColor: options.background }
     : { id: PANE, title: 'Run deck', closeOnEscape: true as const }
   await $.ui.open(how.focus ? { ...base, focus: true } : base)
+}
+
+async function boundKey($: EngineInterface, action: string): Promise<string | null> {
+  const home = await $.env.get('HOME')
+  const path = `${home ?? ''}/.claude/keybindings.json`
+  if (!home || !(await $.fs.exists(path))) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await $.fs.read(path))
+  } catch {
+    return null // a keybindings file Claude Code itself would warn about
+  }
+  const blocks = (parsed as { bindings?: { bindings?: Record<string, unknown> }[] }).bindings ?? []
+  for (const block of blocks) {
+    for (const [keys, bound] of Object.entries(block.bindings ?? {})) {
+      if (bound === action) return keys.replace(/\b(meta|opt|option)\+/g, 'alt+')
+    }
+  }
+  return null
 }
 
 function headOf(text: string): string {

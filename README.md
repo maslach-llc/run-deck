@@ -58,7 +58,7 @@ Bare digits only work while the prompt is empty. To press a row while you are ty
 }
 ```
 
-`deck-1` to `deck-9` press a row, `deck-all` runs everything pending, `deck-hide` hides the band or brings it back, and `deck-answer` scrolls the transcript to where the last answer starts. Each also works typed as a slash command.
+`deck-1` to `deck-9` press a row, `deck-all` runs everything pending, `deck-hide` folds the band to one row (naming the key that brings it back) or opens it again, and `deck-answer` scrolls the transcript to where the last answer starts. Each also works typed as a slash command.
 
 ## Options
 
