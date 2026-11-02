@@ -158,3 +158,25 @@ test('deck-hide hides the band and brings it back', async ($, on) => {
   expect(await ui.find({ key: 'r1' })).toBeDefined()
   await ui.unmount()
 })
+
+test('run all over a risky command arms on the first press and runs everything on the second', async ($, on) => {
+  const seen = stubEngine(on, [])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({
+    answer: 'Done.\n\n```bash\nnpm test\ngit push origin main\nnpm run build\n```\n',
+    durationMs: 10,
+    isAborted: false,
+    turnId: 't9',
+    reason: 'answered',
+  })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ key: 'all' }))?.text).toContain('1 risky')
+  await ui.press({ key: 'all' })
+  expect(seen.spawns).toEqual([])
+  expect((await ui.find({ key: 'all' }))?.text).toContain('press 0 again')
+
+  await ui.press({ key: 'all' })
+  expect(seen.spawns).toEqual(['npm test', 'git push origin main', 'npm run build'])
+  await ui.unmount()
+})

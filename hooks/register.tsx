@@ -294,6 +294,7 @@ export const register: Register = (on, rawOptions) => {
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
+    const riskyLeft = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && needsConfirm(a)).length
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -322,7 +323,13 @@ export const register: Register = (on, rawOptions) => {
         <Box gap={2}>
           {hasPending && (
             <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
-              run all
+              {current.isAllArmed ? (
+                <Text color="warning">press 0 again: run all</Text>
+              ) : riskyLeft > 0 ? (
+                `run all (${riskyLeft} risky)`
+              ) : (
+                'run all'
+              )}
             </Button>
           )}
           <Button key="copy" plain hotkey="c" onPress={p => void $.ui.copy({ text: blockOf(current), surface: p.surface })}>
@@ -690,19 +697,31 @@ async function runShell($: EngineInterface, action: Action) {
   }
 }
 
+// Run all: with a risky command among the pending ones, the first press arms
+// it and a second press within 8 seconds runs everything, the risky ones
+// included, without stopping at them. A failure still stops the run.
 async function runAll($: EngineInterface, surface: Surface | undefined) {
   if (isRunningAll) return
+  const current = await read($, deck)
+  if (!current) return
+  const pending = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual')
+  if (pending.length === 0) return
+
+  if (!current.isAllArmed && pending.some(needsConfirm)) {
+    await update($, deck, d => (d ? { ...d, isAllArmed: true } : d))
+    $.clock.after(8000, () => {
+      void update($, deck, d => (d && d.isAllArmed ? { ...d, isAllArmed: false } : d))
+    })
+    return
+  }
+
   isRunningAll = true
+  await update($, deck, d => (d ? { ...d, isAllArmed: false } : d))
   try {
     for (;;) {
-      const current = await read($, deck)
-      const nextUp = current?.actions.find(a => a.status === 'pending' && a.kind !== 'manual' && !inFlight.has(a.id))
+      const now = await read($, deck)
+      const nextUp = now?.actions.find(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && !inFlight.has(a.id))
       if (!nextUp) break
-      if (needsConfirm(nextUp)) {
-        await setAction($, nextUp.id, a => ({ ...a, status: 'armed' }))
-        $.ui.toast(`Stopped before a risky one: press ${indexOf(current!, nextUp.id) + 1} again to run it`)
-        break
-      }
       await run($, nextUp, surface)
       const after = await read($, deck)
       if (after?.actions.find(a => a.id === nextUp.id)?.status === 'failed') break

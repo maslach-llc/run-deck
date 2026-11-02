@@ -25,6 +25,8 @@ export type Deck = {
   actions: Action[]
   isHidden: boolean
   isContinued?: boolean
+  /** Run all was pressed once over a risky command; a second press runs everything. */
+  isAllArmed?: boolean
 }
 
 declare module 'claude-code' {
