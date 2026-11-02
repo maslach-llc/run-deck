@@ -171,10 +171,10 @@ test('run all over a risky command arms on the first press and runs everything o
   })
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect((await ui.find({ key: 'all' }))?.text).toContain('1 risky')
+  expect((await ui.find({ key: 'all' }))?.text).toContain('run all ⚠')
   await ui.press({ key: 'all' })
   expect(seen.spawns).toEqual([])
-  expect((await ui.find({ key: 'all' }))?.text).toContain('press 0 again')
+  expect((await ui.find({ key: 'all' }))?.text).toContain('press again')
 
   await ui.press({ key: 'all' })
   expect(seen.spawns).toEqual(['npm test', 'git push origin main', 'npm run build'])

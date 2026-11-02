@@ -294,7 +294,7 @@ export const register: Register = (on, rawOptions) => {
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
-    const riskyLeft = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && needsConfirm(a)).length
+    const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && a.kind !== 'manual' && needsConfirm(a))
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -324,9 +324,9 @@ export const register: Register = (on, rawOptions) => {
           {hasPending && (
             <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
               {current.isAllArmed ? (
-                <Text color="warning">press 0 again: run all</Text>
-              ) : riskyLeft > 0 ? (
-                `run all (${riskyLeft} risky)`
+                <Text color="warning">run all · press again</Text>
+              ) : hasRisky ? (
+                <Text color="warning">run all ⚠</Text>
               ) : (
                 'run all'
               )}
