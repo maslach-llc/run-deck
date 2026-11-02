@@ -1,0 +1,17 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "run-deck",
+  "description": "run-deck: buttons above the Claude Code prompt for the commands Claude asks you to run.",
+  "owner": {
+    "name": "Maslach LLC",
+    "email": "hello@maslach.com"
+  },
+  "plugins": [
+    {
+      "name": "run-deck",
+      "source": "./",
+      "description": "Numbered buttons above the prompt for the commands Claude asks you to run; results go back to Claude with your next prompt.",
+      "license": "MIT"
+    }
+  ]
+}

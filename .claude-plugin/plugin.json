@@ -1,0 +1,57 @@
+{
+  "name": "run-deck",
+  "version": "0.1.0",
+  "description": "Turns the commands Claude asks you to run into numbered buttons above the prompt: press a digit to run one, see the exit code, and the output rides back to Claude with your next prompt.",
+  "author": {
+    "name": "Maslach LLC",
+    "email": "hello@maslach.com",
+    "url": "https://maslach.com"
+  },
+  "homepage": "https://github.com/maslach-llc/run-deck",
+  "repository": "https://github.com/maslach-llc/run-deck",
+  "license": "MIT",
+  "keywords": [
+    "mod",
+    "commands",
+    "run",
+    "band",
+    "hotkeys"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "confirm": {
+      "type": "string",
+      "title": "Confirm before running",
+      "description": "Which commands need a second press before they run: risky ones (rm -r, git push, sudo, prod...), all of them, or none",
+      "options": [
+        "risky",
+        "always",
+        "never"
+      ],
+      "default": "risky"
+    },
+    "output": {
+      "type": "string",
+      "title": "Where command output goes",
+      "description": "A pane that opens while a command runs, a toast with the exit code only, or nothing on screen (the result still reaches Claude)",
+      "options": [
+        "pane",
+        "toast",
+        "quiet"
+      ],
+      "default": "pane"
+    },
+    "copy": {
+      "type": "boolean",
+      "title": "Copy the block to the clipboard",
+      "description": "Also put the whole command block on the clipboard when a reply ends with one",
+      "default": false
+    },
+    "auto_continue": {
+      "type": "boolean",
+      "title": "Continue automatically",
+      "description": "Send the results to Claude as soon as every command has run, instead of waiting for your next prompt",
+      "default": false
+    }
+  }
+}
