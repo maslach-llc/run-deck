@@ -50,7 +50,7 @@ Bare digits only work while the prompt is empty. To press a row while you are ty
         "meta+2": "command:deck-2",
         "meta+3": "command:deck-3",
         "meta+0": "command:deck-all",
-        "meta+h": "command:deck-hide",
+        "meta+d": "command:deck-hide",
         "meta+a": "command:deck-answer"
       }
     }
