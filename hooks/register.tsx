@@ -751,7 +751,7 @@ async function runInteractive($: EngineInterface, action: Action, surface?: Surf
     $.ui.toast(copied.isCopied ? 'Needs a terminal: command copied, paste it in a shell' : 'Needs a terminal: run it in a shell yourself')
     return
   }
-  const made = await $.process.run(['tmux', 'split-window', '-v', '-l', '40%', '-c', cwd, '-P', '-F', '#{pane_id}'])
+  const made = await $.process.run(['tmux', 'split-window', '-h', '-l', '50%', '-c', cwd, '-P', '-F', '#{pane_id}'])
   const paneId = made.stdout.trim()
   if (made.exitCode !== 0 || !paneId) {
     const reason = made.stderr.trim() || 'tmux split-window failed'
