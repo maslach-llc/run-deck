@@ -356,29 +356,16 @@ export const register: Register = (on, rawOptions) => {
       </Button>
     )
 
-    // Related rows sit together under a heading: the commands (with their run
-    // all, which runs only them), the replies (alternatives: one press sends
+    // Related rows sit together under a heading: the commands, the replies (alternatives: one press sends
     // one), and each question with its options.
     type Group = { key: string; head: string; note?: string; rows: RenderChildren[] }
     const groups: Group[] = []
     const commands = current.actions.filter(a => a.kind !== 'reply')
     if (commands.length > 0) {
-      const all =
-        hasPending && pendingRunnable > 0 ? (
-          <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
-            {current.isAllArmed ? (
-              <Text color="warning">{'press again'.padEnd(STATUS_WIDTH)} run {nCommands}</Text>
-            ) : hasRisky ? (
-              <Text color="warning">{'run all ⚠'.padEnd(STATUS_WIDTH)} run {nCommands} above, in order</Text>
-            ) : (
-              <Text>{'run all'.padEnd(STATUS_WIDTH)} run {nCommands} above, in order</Text>
-            )}
-          </Button>
-        ) : null
       groups.push({
         key: 'commands',
         head: 'Commands',
-        rows: [...commands.map(a => actionRow(a)), ...(all ? [all] : [])],
+        rows: commands.map(a => actionRow(a)),
       })
     }
     const replies = current.actions.filter(a => a.kind === 'reply')
@@ -475,6 +462,18 @@ export const register: Register = (on, rawOptions) => {
           </Button>
         )}
         <Box gap={2}>
+          {hasPending && pendingRunnable > 0 && (
+            // run all leads the bottom row: it runs only the commands, never a reply or a question
+            <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
+              {current.isAllArmed ? (
+                <Text color="warning">press again: run {nCommands}</Text>
+              ) : hasRisky ? (
+                <Text color="warning">run all ⚠ ({pendingRunnable})</Text>
+              ) : (
+                <Text>run all ({pendingRunnable})</Text>
+              )}
+            </Button>
+          )}
           <Button key="details" plain hotkey="i" onPress={() => void showDetails($)}>
             details
           </Button>
