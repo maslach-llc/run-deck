@@ -79,7 +79,8 @@ export const register: Register = (on, rawOptions) => {
         'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
         'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
         'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
-        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits every answer as their next prompt.',
+        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits every answer as their next prompt. ' +
+        'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one").',
       inputSchema: {
         type: 'object',
         properties: {
