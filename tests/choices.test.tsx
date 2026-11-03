@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const BAND = {
   plugin: 'run-deck',
@@ -170,4 +170,29 @@ test('related rows sit under headings, replies after commands, and run all count
   expect((await ui.find({ key: 'send' }))?.props.hotkey).toBe('7')
   expect((await ui.find({ key: 'all' }))?.text).toContain('run all (2)')
   await ui.unmount()
+})
+
+test('the digit shortcuts send the answers and a reply, outside the command hook', async ($, on) => {
+  const seen = stubEngine(on)
+  const clock = mock.clock(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.tool.call({
+    tool: 'mcp__run-deck__request_user_action',
+    choices: [{ question: 'Next', multi: true, options: ['consent', 'fix the link'] }],
+  })
+
+  // options 1-2, send 3: the press comes in as /deck-N, a command.run hook
+  await $.command.run({ command: 'deck-1', args: '' })
+  await $.command.run({ command: 'deck-2', args: '' })
+  await $.command.run({ command: 'deck-3', args: '' })
+  await clock.advance(0)
+  expect(seen.prompts).toEqual(['Next: consent, fix the link'])
+
+  await $.tool.call({
+    tool: 'mcp__run-deck__request_user_action',
+    actions: [{ label: 'Yes: commit it', command: 'yes: commit it', kind: 'reply' }],
+  })
+  await $.command.run({ command: 'deck-1', args: '' })
+  await clock.advance(0)
+  expect(seen.prompts).toEqual(['Next: consent, fix the link', 'yes: commit it'])
 })
