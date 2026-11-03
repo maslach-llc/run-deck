@@ -79,7 +79,7 @@ export const register: Register = (on, rawOptions) => {
         'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
         'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
         'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
-        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits every answer as their next prompt. ' +
+        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits the answered questions as their next prompt; an unanswered one stays open for later. ' +
         'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one").',
       inputSchema: {
         type: 'object',
@@ -235,7 +235,7 @@ export const register: Register = (on, rawOptions) => {
         d ? { ...d, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) } : d,
       )
       // Everything ran and Claude has it: the deck has done its job.
-      if (after && after.actions.every(a => a.isReported) && !hasOpenChoices(after)) await clearDeck($)
+      if (after && isSettled(after)) await clearDeck($)
     }
 
     return entered
@@ -317,7 +317,7 @@ export const register: Register = (on, rawOptions) => {
     if (current.isHidden) {
       const left = current.actions.filter(a => a.status === 'pending' || a.status === 'armed' || a.status === 'running').length
       const failed = current.actions.filter(a => a.status === 'failed').length
-      const asking = hasOpenChoices(current) ? (current.choices ?? []).length : 0
+      const asking = openChoices(current).length
       const counts = [left > 0 ? `${left} to run` : '', failed > 0 ? `${failed} failed` : '', asking > 0 ? `${asking} to answer` : '']
         .filter(Boolean)
         .join(', ')
@@ -338,7 +338,7 @@ export const register: Register = (on, rawOptions) => {
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
     const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
     const rows = rowsOf(current)
-    const isComplete = (current.choices ?? []).every(c => c.isMulti || c.picked.length > 0)
+    const hasAnswer = openChoices(current).some(c => c.picked.length > 0)
     const hotkeyOf = (row: Row): string | undefined => {
       const i = rows.findIndex(r => sameRow(r, row))
       return i >= 0 && i < 9 ? String(i + 1) : undefined
@@ -361,8 +361,8 @@ export const register: Register = (on, rawOptions) => {
       </Button>
     )
 
-    // Related rows sit together under a heading: the commands, the replies (alternatives: one press sends
-    // one), and each question with its options.
+    // Related rows sit together under a heading: the commands, the replies (each its own go-ahead: one
+    // press sends it, the others stay), and each question with its options.
     type Group = { key: string; head: string; note?: string; rows: RenderChildren[] }
     const groups: Group[] = []
     const commands = current.actions.filter(a => a.kind !== 'reply')
@@ -375,58 +375,50 @@ export const register: Register = (on, rawOptions) => {
     }
     const replies = current.actions.filter(a => a.kind === 'reply')
     if (replies.length > 0) {
-      const isPickOne = replies.length > 1
       groups.push({
         key: 'replies',
         head: 'Reply',
-        note: isPickOne ? 'pick one, it sends' : 'one press sends it',
-        rows: replies.map(a =>
-          actionRow(a, isPickOne ? (a.status === 'pending' ? '( )' : a.status === 'done' ? '(•) sent' : '( ) skip') : undefined),
-        ),
+        note: 'one press sends it',
+        rows: replies.map(a => actionRow(a)),
       })
     }
-    if (hasOpenChoices(current)) {
-      for (const c of current.choices ?? []) {
-        groups.push({
-          key: c.id,
-          head: c.question,
-          note: c.isMulti ? 'pick any' : sendsOnPick(current) ? 'pick one, it sends' : 'pick one',
-          rows: c.options.map(o => {
-            const isPicked = c.picked.includes(o.id)
-            const mark = c.isMulti ? (isPicked ? '[x]' : '[ ]') : isPicked ? '(•)' : '( )'
-            const text = o.description ? `${o.label} · ${o.description}` : o.label
-            return (
-              <Button
-                key={`${c.id}-${o.id}`}
-                plain
-                hotkey={hotkeyOf({ type: 'option', choiceId: c.id, optionId: o.id })}
-                onPress={() => void pickOption($, c.id, o.id)}
-              >
-                <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text>{' '}
-                <Text dimColor={!isPicked}>{shorten(text, room)}</Text>
-              </Button>
-            )
-          }),
-        })
-      }
-    } else if (current.isAnswered) {
-      // sent: every option stays, marked picked or not, and none can be pressed
-      for (const c of current.choices ?? []) {
+    for (const c of current.choices ?? []) {
+      if (c.isSent) {
+        // sent: one dim line with the answer, so the rest of the deck reads as what is left
+        const labels = c.options.filter(o => c.picked.includes(o.id)).map(o => o.label)
         groups.push({
           key: c.id,
           head: c.question,
           note: 'sent',
-          rows: c.options.map(o => {
-            const isPicked = c.picked.includes(o.id)
-            const mark = c.isMulti ? (isPicked ? '[x] sent' : '[ ] skip') : isPicked ? '(•) sent' : '( ) skip'
-            return (
-              <Text key={`${c.id}-${o.id}`} dimColor={!isPicked} wrap="truncate-end">
-                <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text> {shorten(o.label, room)}
-              </Text>
-            )
-          }),
+          rows: [
+            <Text key={`${c.id}-sent`} dimColor wrap="truncate-end">
+              <Text color="success">{'✓ sent'.padEnd(STATUS_WIDTH)}</Text> {shorten(labels.join(', ') || 'none of them', room)}
+            </Text>,
+          ],
         })
+        continue
       }
+      groups.push({
+        key: c.id,
+        head: c.question,
+        note: c.isMulti ? 'pick any' : sendsOnPick(current) ? 'pick one, it sends' : 'pick one',
+        rows: c.options.map(o => {
+          const isPicked = c.picked.includes(o.id)
+          const mark = c.isMulti ? (isPicked ? '[x]' : '[ ]') : isPicked ? '(•)' : '( )'
+          const text = o.description ? `${o.label} · ${o.description}` : o.label
+          return (
+            <Button
+              key={`${c.id}-${o.id}`}
+              plain
+              hotkey={hotkeyOf({ type: 'option', choiceId: c.id, optionId: o.id })}
+              onPress={() => void pickOption($, c.id, o.id)}
+            >
+              <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text>{' '}
+              <Text dimColor={!isPicked}>{shorten(text, room)}</Text>
+            </Button>
+          )
+        }),
+      })
     }
     const hasHeads = groups.length > 1
 
@@ -460,10 +452,10 @@ export const register: Register = (on, rawOptions) => {
             hotkey={hotkeyOf({ type: 'send' })}
             onPress={() => void sendAnswers($)}
           >
-            <Text color={isComplete ? 'success' : 'warning'}>
-              {(isComplete ? 'send' : current.isSendArmed ? 'press again' : 'send ⚠').padEnd(STATUS_WIDTH)}
+            <Text color={hasAnswer ? 'success' : undefined} dimColor={!hasAnswer}>
+              {'send'.padEnd(STATUS_WIDTH)}
             </Text>{' '}
-            <Text dimColor={!isComplete}>{isComplete ? 'send the answers' : 'send the answers (a pick-one question is unanswered)'}</Text>
+            <Text dimColor={!hasAnswer}>{hasAnswer ? 'send the answered questions; the rest stay open' : 'pick an answer first'}</Text>
           </Button>
         )}
         <Box gap={2}>
@@ -637,9 +629,28 @@ function submitsOnPress(d: Deck, row: Row): boolean {
   return d.actions.find(a => a.id === row.id)?.kind === 'reply'
 }
 
-/** Questions still waiting for their send row. */
+/** Questions not sent yet. */
+function openChoices(d: Deck): Choice[] {
+  return (d.choices ?? []).filter(c => !c.isSent)
+}
+
 function hasOpenChoices(d: Deck): boolean {
-  return (d.choices ?? []).length > 0 && !d.isAnswered
+  return openChoices(d).length > 0
+}
+
+/**
+ * Nothing left on the deck: every question sent, and every row either pressed and
+ * reported or never to be pressed. A pending reply, a manual step not ticked off or a
+ * result Claude has not had yet all keep it up. The /clear offer does not.
+ */
+function isSettled(d: Deck): boolean {
+  if (hasOpenChoices(d)) return false
+  return d.actions.every(
+    a =>
+      a.id === CLEAR_ID ||
+      a.status === 'skipped' ||
+      ((a.status === 'done' || a.status === 'failed') && a.isReported),
+  )
 }
 
 type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; optionId: string } | { type: 'send' }
@@ -650,7 +661,7 @@ function rowsOf(d: Deck): Row[] {
   const ordered = [...d.actions.filter(a => a.kind !== 'reply'), ...d.actions.filter(a => a.kind === 'reply')]
   const rows: Row[] = ordered.map(a => ({ type: 'action', id: a.id }))
   if (!hasOpenChoices(d)) return rows
-  for (const c of d.choices ?? []) for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
+  for (const c of openChoices(d)) for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
   if (!sendsOnPick(d)) rows.push({ type: 'send' })
   return rows
 }
@@ -661,14 +672,14 @@ function sameRow(a: Row, b: Row): boolean {
   return a.type === b.type
 }
 
-/** One pick-one question and nothing else to answer: the pick is the answer. */
+/** One pick-one question and nothing else open: the pick is the answer. */
 function sendsOnPick(d: Deck): boolean {
-  const choices = d.choices ?? []
-  return choices.length === 1 && choices[0]?.isMulti === false
+  const open = openChoices(d)
+  return open.length === 1 && open[0]?.isMulti === false
 }
 
-function answersOf(d: Deck): string {
-  return (d.choices ?? [])
+function answersOf(choices: Choice[]): string {
+  return choices
     .map(c => {
       const labels = c.options.filter(o => c.picked.includes(o.id)).map(o => o.label)
       return `${c.question}: ${labels.length > 0 ? labels.join(', ') : c.isMulti ? 'none of them' : 'no answer'}`
@@ -941,11 +952,11 @@ async function pressRow($: EngineInterface, row: Row, surface: Surface | undefin
 // lone pick-one question is answered by the pick itself, with no send row.
 async function pickOption($: EngineInterface, choiceId: string, optionId: string) {
   await update($, deck, d =>
-    d && !d.isAnswered
+    d
       ? {
           ...d,
           choices: (d.choices ?? []).map(c =>
-            c.id !== choiceId
+            c.id !== choiceId || c.isSent
               ? c
               : c.isMulti
                 ? { ...c, picked: c.picked.includes(optionId) ? c.picked.filter(p => p !== optionId) : [...c.picked, optionId] }
@@ -958,42 +969,43 @@ async function pickOption($: EngineInterface, choiceId: string, optionId: string
   if (now && hasOpenChoices(now) && sendsOnPick(now)) await sendAnswers($)
 }
 
-// The send row: the answers go in as the user's prompt. A plugin's own prompt
-// carries no context, so results not yet sent ride along in its text. A
-// pick-one question left unanswered arms the row first, like a risky command.
+// The send row: the answered questions go in as the user's prompt, and the
+// unanswered ones stay open for a later send. A plugin's own prompt carries no
+// context, so results not yet sent ride along in its text.
 async function sendAnswers($: EngineInterface) {
   const current = await read($, deck)
-  if (!current || !hasOpenChoices(current)) return
-  const isComplete = (current.choices ?? []).every(c => c.isMulti || c.picked.length > 0)
-  if (!isComplete && !current.isSendArmed) {
-    await update($, deck, d => (d ? { ...d, isSendArmed: true } : d))
-    $.ui.toast('A pick-one question has no answer: press send again to send anyway', { timeoutMs: 4000 })
-    $.clock.after(8000, () => {
-      void update($, deck, d => (d && d.isSendArmed ? { ...d, isSendArmed: false } : d))
-    })
+  if (!current) return
+  const ready = openChoices(current).filter(c => c.picked.length > 0)
+  if (ready.length === 0) {
+    if (hasOpenChoices(current)) $.ui.toast('Pick an answer first: send sends the answered questions', { timeoutMs: 4000 })
     return
   }
+  const ids = new Set(ready.map(c => c.id))
   const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
   await update($, deck, d =>
     d
       ? {
           ...d,
-          isAnswered: true,
-          isSendArmed: false,
+          choices: (d.choices ?? []).map(c => (ids.has(c.id) ? { ...c, isSent: true } : c)),
           actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)),
         }
       : d,
   )
   if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
-  const answers = answersOf(current)
+  const answers = answersOf(ready)
   const text = finished.length > 0 ? `${answers}\n\n${reportOf(current, finished)}` : answers
   if (!(await submitted($, text))) {
-    await update($, deck, d => (d ? { ...d, isAnswered: current.isAnswered, isSendArmed: false, actions: restored(d, current) } : d))
+    await update($, deck, d => (d ? { ...d, choices: current.choices, actions: restored(d, current) } : d))
     await afterChange($)
     return
   }
+  await settle($)
+}
+
+/** Clears the deck once nothing is left on it; otherwise refreshes the status. */
+async function settle($: EngineInterface) {
   const after = await read($, deck)
-  if (after && after.actions.every(a => a.isReported || a.kind === 'reply' || a.kind === 'slash')) await clearDeck($)
+  if (after && isSettled(after)) await clearDeck($)
   else await afterChange($)
 }
 
@@ -1105,25 +1117,27 @@ async function sendReply($: EngineInterface, action: Action) {
     d
       ? {
           ...d,
-          // the other replies were alternatives to this one: marked not picked
+          // the other replies are go-aheads of their own: they stay to be pressed
           actions: d.actions.map(a =>
             a.id === action.id
               ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
-              : a.kind === 'reply' && a.status === 'pending'
-                ? { ...a, status: 'skipped' as const, isReported: true }
-                : finished.some(f => f.id === a.id)
-                  ? { ...a, isReported: true }
-                  : a,
+              : finished.some(f => f.id === a.id)
+                ? { ...a, isReported: true }
+                : a,
           ),
         }
       : d,
   )
   if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
   const text = finished.length > 0 ? `${action.command}\n\n${reportOf(current, finished)}` : action.command
-  // Nothing entered: the row, its sibling replies and the results go back to
-  // how they were, so the press can be made again.
-  if (!(await submitted($, text))) await update($, deck, d => (d ? { ...d, actions: restored(d, current) } : d))
-  await afterChange($)
+  // Nothing entered: the row and the results go back to how they were, so
+  // the press can be made again.
+  if (!(await submitted($, text))) {
+    await update($, deck, d => (d ? { ...d, actions: restored(d, current) } : d))
+    await afterChange($)
+    return
+  }
+  await settle($)
 }
 
 // Each action of `now` as it stood in `before` (one added since stays as is).

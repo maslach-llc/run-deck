@@ -185,7 +185,7 @@ test('run all over a risky command arms on the first press and runs everything o
   await ui.unmount()
 })
 
-test('a reply row sends its text as the prompt with one press, and run all skips it', async ($, on) => {
+test('a reply row sends its text as the prompt with one press, run all skips it, and a done deck clears', async ($, on) => {
   const seen = stubEngine(on, [])
   on('ui.render', ($: any, e: any) => {
     const { Text } = $.ui.resolve(e)
@@ -213,11 +213,8 @@ test('a reply row sends its text as the prompt with one press, and run all skips
   expect(seen.prompts[0]!.text).toStartWith('yes: fix the blintz bug')
   // The finished command rides along in the text, since a plugin's prompt has no context.
   expect(seen.prompts[0]!.text).toContain('npm test')
-  expect((await ui.find({ key: 't2' }))?.text).toContain('✓ sent')
-
-  // A sent reply is not sent twice.
-  await ui.press({ key: 't2' })
-  expect(seen.prompts.length).toBe(1)
+  // The command was reported and the reply sent: nothing is left, so the deck clears.
+  expect(await ui.find({ key: 't2' })).toBeUndefined()
   await ui.unmount()
 })
 
