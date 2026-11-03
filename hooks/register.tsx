@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren, UiPressArgument } from 'claude-code'
 
 import type { Action, ActionKind, ActionRisk, Choice, Deck } from '../types'
 import { classifyKind, classifyRisk, lastShellBlock, parseBlock, shorten } from './parse'
@@ -332,8 +332,110 @@ export const register: Register = (on, rawOptions) => {
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
     const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
     const rows = rowsOf(current)
-    const sendAt = rows.findIndex(r => r.type === 'send')
     const isComplete = (current.choices ?? []).every(c => c.isMulti || c.picked.length > 0)
+    const hotkeyOf = (row: Row): string | undefined => {
+      const i = rows.findIndex(r => sameRow(r, row))
+      return i >= 0 && i < 9 ? String(i + 1) : undefined
+    }
+    const pendingRunnable = current.actions.filter(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a)).length
+    const nCommands = pendingRunnable === 1 ? 'the 1 command' : `the ${pendingRunnable} commands`
+
+    const actionRow = (a: Action, mark?: string) => (
+      <Button
+        key={a.id}
+        plain
+        hotkey={hotkeyOf({ type: 'action', id: a.id })}
+        dimColor={a.status === 'done' || a.status === 'skipped'}
+        onPress={p => void press($, a.id, p.surface)}
+      >
+        <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe' && a.kind === 'shell'}>
+          {(mark ?? chip(a)).padEnd(STATUS_WIDTH)}
+        </Text>{' '}
+        {rowText(a, room)}
+      </Button>
+    )
+
+    // Related rows sit together under a heading: the commands (with their run
+    // all, which runs only them), the replies (alternatives: one press sends
+    // one), and each question with its options.
+    type Group = { key: string; head: string; note?: string; rows: RenderChildren[] }
+    const groups: Group[] = []
+    const commands = current.actions.filter(a => a.kind !== 'reply')
+    if (commands.length > 0) {
+      const all =
+        hasPending && pendingRunnable > 0 ? (
+          <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
+            {current.isAllArmed ? (
+              <Text color="warning">{'press again'.padEnd(STATUS_WIDTH)} run {nCommands}</Text>
+            ) : hasRisky ? (
+              <Text color="warning">{'run all ⚠'.padEnd(STATUS_WIDTH)} run {nCommands} above, in order</Text>
+            ) : (
+              <Text>{'run all'.padEnd(STATUS_WIDTH)} run {nCommands} above, in order</Text>
+            )}
+          </Button>
+        ) : null
+      groups.push({
+        key: 'commands',
+        head: 'Commands',
+        rows: [...commands.map(a => actionRow(a)), ...(all ? [all] : [])],
+      })
+    }
+    const replies = current.actions.filter(a => a.kind === 'reply')
+    if (replies.length > 0) {
+      const isPickOne = replies.length > 1
+      groups.push({
+        key: 'replies',
+        head: 'Reply',
+        note: isPickOne ? 'pick one, it sends' : 'one press sends it',
+        rows: replies.map(a =>
+          actionRow(a, isPickOne ? (a.status === 'pending' ? '( )' : a.status === 'done' ? '(•) sent' : '( ) skip') : undefined),
+        ),
+      })
+    }
+    if (hasOpenChoices(current)) {
+      for (const c of current.choices ?? []) {
+        groups.push({
+          key: c.id,
+          head: c.question,
+          note: c.isMulti ? 'pick any' : sendsOnPick(current) ? 'pick one, it sends' : 'pick one',
+          rows: c.options.map(o => {
+            const isPicked = c.picked.includes(o.id)
+            const mark = c.isMulti ? (isPicked ? '[x]' : '[ ]') : isPicked ? '(•)' : '( )'
+            const text = o.description ? `${o.label} · ${o.description}` : o.label
+            return (
+              <Button
+                key={`${c.id}-${o.id}`}
+                plain
+                hotkey={hotkeyOf({ type: 'option', choiceId: c.id, optionId: o.id })}
+                onPress={() => void pickOption($, c.id, o.id)}
+              >
+                <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text>{' '}
+                <Text dimColor={!isPicked}>{shorten(text, room)}</Text>
+              </Button>
+            )
+          }),
+        })
+      }
+    } else if (current.isAnswered) {
+      // sent: every option stays, marked picked or not, and none can be pressed
+      for (const c of current.choices ?? []) {
+        groups.push({
+          key: c.id,
+          head: c.question,
+          note: 'sent',
+          rows: c.options.map(o => {
+            const isPicked = c.picked.includes(o.id)
+            const mark = c.isMulti ? (isPicked ? '[x] sent' : '[ ] skip') : isPicked ? '(•) sent' : '( ) skip'
+            return (
+              <Text key={`${c.id}-${o.id}`} dimColor={!isPicked} wrap="truncate-end">
+                <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text> {shorten(o.label, room)}
+              </Text>
+            )
+          }),
+        })
+      }
+    }
+    const hasHeads = groups.length > 1
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -345,58 +447,24 @@ export const register: Register = (on, rawOptions) => {
             {done > 0 ? ` · ${done}/${current.actions.length} done` : ''}
           </Text>
         </Text>
-        {current.actions.map((a, i) => (
-          <Button
-            key={a.id}
-            plain
-            hotkey={i < 9 ? String(i + 1) : undefined}
-            dimColor={a.status === 'done'}
-            onPress={p => void press($, a.id, p.surface)}
-          >
-            <Text color={chipColor(a)} dimColor={a.status === 'pending' && a.risk === 'safe' && a.kind === 'shell'}>
-              {chip(a).padEnd(STATUS_WIDTH)}
-            </Text>{' '}
-            {rowText(a, room)}
-          </Button>
-        ))}
-        {hasOpenChoices(current) &&
-          (current.choices ?? []).flatMap(c => [
-            <Text key={`${c.id}-q`} wrap="truncate-end">
-              <Text bold>{c.question}</Text>
-              <Text dimColor>{c.isMulti ? ' · pick any' : ' · pick one'}</Text>
-            </Text>,
-            ...c.options.map(o => {
-              const i = rows.findIndex(r => r.type === 'option' && r.choiceId === c.id && r.optionId === o.id)
-              const isPicked = c.picked.includes(o.id)
-              const mark = c.isMulti ? (isPicked ? '[x]' : '[ ]') : isPicked ? '(•)' : '( )'
-              const text = o.description ? `${o.label} · ${o.description}` : o.label
-              return (
-                <Button
-                  key={`${c.id}-${o.id}`}
-                  plain
-                  hotkey={i >= 0 && i < 9 ? String(i + 1) : undefined}
-                  onPress={() => void pickOption($, c.id, o.id)}
-                >
-                  <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text>{' '}
-                  <Text dimColor={!isPicked}>{shorten(text, room)}</Text>
-                </Button>
-              )
-            }),
-          ])}
-        {current.isAnswered &&
-          (current.choices ?? []).map(c => {
-            const labels = c.options.filter(o => c.picked.includes(o.id)).map(o => o.label)
-            return (
-              <Text key={`${c.id}-sent`} dimColor wrap="truncate-end">
-                <Text color="success">{'✓ sent'.padEnd(STATUS_WIDTH)}</Text> {shorten(`${c.question}: ${labels.join(', ') || 'none'}`, room)}
+        {groups.map(g => (
+          <Box key={`g-${g.key}`} flexDirection="column">
+            {hasHeads && (
+              <Text wrap="truncate-end">
+                <Text bold>{g.head}</Text>
+                {g.note && <Text dimColor>{` · ${g.note}`}</Text>}
               </Text>
-            )
-          })}
+            )}
+            <Box flexDirection="column" paddingLeft={hasHeads ? 2 : 0}>
+              {g.rows}
+            </Box>
+          </Box>
+        ))}
         {hasOpenChoices(current) && !sendsOnPick(current) && (
           <Button
             key="send"
             plain
-            hotkey={sendAt >= 0 && sendAt < 9 ? String(sendAt + 1) : undefined}
+            hotkey={hotkeyOf({ type: 'send' })}
             onPress={() => void sendAnswers($)}
           >
             <Text color={isComplete ? 'success' : 'warning'}>
@@ -406,17 +474,6 @@ export const register: Register = (on, rawOptions) => {
           </Button>
         )}
         <Box gap={2}>
-          {hasPending && (
-            <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
-              {current.isAllArmed ? (
-                <Text color="warning">run all · press again</Text>
-              ) : hasRisky ? (
-                <Text color="warning">run all ⚠</Text>
-              ) : (
-                'run all'
-              )}
-            </Button>
-          )}
           <Button key="details" plain hotkey="i" onPress={() => void showDetails($)}>
             details
           </Button>
@@ -577,11 +634,19 @@ type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; 
 
 /** Every numbered row of the band, in order: actions, then each choice's options, then send. */
 function rowsOf(d: Deck): Row[] {
-  const rows: Row[] = d.actions.map(a => ({ type: 'action', id: a.id }))
+  // the band's order: commands, then replies, then each question's options
+  const ordered = [...d.actions.filter(a => a.kind !== 'reply'), ...d.actions.filter(a => a.kind === 'reply')]
+  const rows: Row[] = ordered.map(a => ({ type: 'action', id: a.id }))
   if (!hasOpenChoices(d)) return rows
   for (const c of d.choices ?? []) for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
   if (!sendsOnPick(d)) rows.push({ type: 'send' })
   return rows
+}
+
+function sameRow(a: Row, b: Row): boolean {
+  if (a.type === 'action' && b.type === 'action') return a.id === b.id
+  if (a.type === 'option' && b.type === 'option') return a.choiceId === b.choiceId && a.optionId === b.optionId
+  return a.type === b.type
 }
 
 /** One pick-one question and nothing else to answer: the pick is the answer. */
@@ -630,6 +695,8 @@ function chip(a: Action): string {
       return 'running…'
     case 'done':
       return a.kind === 'shell' ? '✓ exit 0' : a.kind === 'interactive' ? '✓ in tmux' : a.kind === 'slash' ? '✓ ran' : a.kind === 'reply' ? '✓ sent' : '✓ done'
+    case 'skipped':
+      return '– not picked'.slice(0, STATUS_WIDTH)
     case 'failed':
       return (a.kind === 'slash' ? '✗ failed' : `✗ exit ${a.exitCode ?? '?'}`).slice(0, STATUS_WIDTH)
     default:
@@ -826,7 +893,7 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
   if (inFlight.has(id)) return
   const current = await read($, deck)
   const action = current?.actions.find(a => a.id === id)
-  if (!action || action.status === 'running') return
+  if (!action || action.status === 'running' || action.status === 'skipped') return
 
   // A manual step is read before it is done: its row opens the details, where `d` ticks it off.
   if (action.kind === 'manual') {
@@ -1022,16 +1089,16 @@ async function sendReply($: EngineInterface, action: Action) {
     d
       ? {
           ...d,
-          // the other go-aheads were alternatives to this one: they go
-          actions: d.actions
-            .filter(a => a.id === action.id || !(a.kind === 'reply' && a.status === 'pending'))
-            .map(a =>
-              a.id === action.id
-                ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
+          // the other replies were alternatives to this one: marked not picked
+          actions: d.actions.map(a =>
+            a.id === action.id
+              ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
+              : a.kind === 'reply' && a.status === 'pending'
+                ? { ...a, status: 'skipped' as const, isReported: true }
                 : finished.some(f => f.id === a.id)
                   ? { ...a, isReported: true }
                   : a,
-            ),
+          ),
         }
       : d,
   )

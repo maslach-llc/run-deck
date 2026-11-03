@@ -1,6 +1,7 @@
 export type ActionKind = 'shell' | 'interactive' | 'manual' | 'slash' | 'reply'
 export type ActionRisk = 'safe' | 'risky'
-export type ActionStatus = 'pending' | 'armed' | 'running' | 'done' | 'failed'
+/** `skipped`: a reply not picked, because another reply of the deck was sent. */
+export type ActionStatus = 'pending' | 'armed' | 'running' | 'done' | 'failed' | 'skipped'
 
 export type Action = {
   id: string
