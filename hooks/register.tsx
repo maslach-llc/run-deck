@@ -975,7 +975,11 @@ async function sendAnswers($: EngineInterface) {
   if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
   const answers = answersOf(current)
   const text = finished.length > 0 ? `${answers}\n\n${reportOf(current, finished)}` : answers
-  void $.prompt.submit({ text })
+  if (!(await submitted($, text))) {
+    await update($, deck, d => (d ? { ...d, isAnswered: current.isAnswered, isSendArmed: false, actions: restored(d, current) } : d))
+    await afterChange($)
+    return
+  }
   const after = await read($, deck)
   if (after && after.actions.every(a => a.isReported || a.kind === 'reply' || a.kind === 'slash')) await clearDeck($)
   else await afterChange($)
@@ -1104,8 +1108,32 @@ async function sendReply($: EngineInterface, action: Action) {
   )
   if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
   const text = finished.length > 0 ? `${action.command}\n\n${reportOf(current, finished)}` : action.command
-  void $.prompt.submit({ text })
+  // Nothing entered: the row, its sibling replies and the results go back to
+  // how they were, so the press can be made again.
+  if (!(await submitted($, text))) await update($, deck, d => (d ? { ...d, actions: restored(d, current) } : d))
   await afterChange($)
+}
+
+// Each action of `now` as it stood in `before` (one added since stays as is).
+function restored(now: Deck, before: Deck): Action[] {
+  return now.actions.map(a => before.actions.find(b => b.id === a.id) ?? a)
+}
+
+// Submits a plugin prompt and says whether it entered. The engine answers a
+// prompt it will not take (a Stop standing, a host limit, a hook's refusal)
+// with `{ drop }`, not an error, so an unchecked submit lost the press while
+// its row read "sent". The person is told; the caller undoes the row.
+async function submitted($: EngineInterface, text: string): Promise<boolean> {
+  let reason: string
+  try {
+    const result = await $.prompt.submit({ text })
+    if (result.drop === undefined) return true
+    reason = result.drop || 'the session did not take it'
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error)
+  }
+  $.ui.toast(`✗ Not sent (${reason}): press it again`, { timeoutMs: 6000 })
+  return false
 }
 
 async function runShell($: EngineInterface, action: Action) {
