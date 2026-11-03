@@ -143,7 +143,7 @@ test('pressing one reply marks the other replies not picked', async ($, on) => {
   await ui.unmount()
 })
 
-test('related rows sit under headings, replies after commands, and run all names what it runs', async ($, on) => {
+test('related rows sit under headings, replies after commands, and run all counts what it runs', async ($, on) => {
   stubEngine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.tool.call({
@@ -168,6 +168,6 @@ test('related rows sit under headings, replies after commands, and run all names
   expect((await ui.find({ key: 't4' }))?.props.hotkey).toBe('4')
   expect((await ui.find({ key: 'c1-o1' }))?.props.hotkey).toBe('5')
   expect((await ui.find({ key: 'send' }))?.props.hotkey).toBe('7')
-  expect((await ui.find({ key: 'all' }))?.text).toContain('the 2 commands above')
+  expect((await ui.find({ key: 'all' }))?.text).toContain('run all (2)')
   await ui.unmount()
 })
