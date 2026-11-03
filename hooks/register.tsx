@@ -295,7 +295,12 @@ export const register: Register = (on, rawOptions) => {
     if (row) {
       const current = await read($, deck)
       const target = current ? rowsOf(current)[Number(row[1]) - 1] : undefined
-      if (target) await pressRow($, target, undefined)
+      if (!target || !current) return {}
+      // A row that submits a prompt (the send row, a reply, a pick-one option
+      // that sends on the pick) runs after this hook returns: the engine
+      // refuses $.prompt.submit from a command.run hook, whose turn it holds.
+      if (submitsOnPress(current, target)) $.clock.after(0, () => void pressRow($, target, undefined))
+      else await pressRow($, target, undefined)
       return {}
     }
     return next(e)
@@ -623,6 +628,13 @@ function choiceFromTool(raw: unknown, i: number): Choice | null {
     .filter((o): o is { id: string; label: string; description?: string } => o !== null)
   if (!question || options.length < 2) return null
   return { id: `c${i + 1}`, question, isMulti: r.multi === true, options, picked: [] }
+}
+
+/** Whether pressing `row` ends in $.prompt.submit. */
+function submitsOnPress(d: Deck, row: Row): boolean {
+  if (row.type === 'send') return true
+  if (row.type === 'option') return sendsOnPick(d)
+  return d.actions.find(a => a.id === row.id)?.kind === 'reply'
 }
 
 /** Questions still waiting for their send row. */
