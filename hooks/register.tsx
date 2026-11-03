@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, UiPressArgument } from 'claude-code'
 
-import type { Action, ActionKind, ActionRisk, Deck } from '../types'
+import type { Action, ActionKind, ActionRisk, Choice, Deck } from '../types'
 import { classifyKind, classifyRisk, lastShellBlock, parseBlock, shorten } from './parse'
 
 const PANE = 'run-deck'
@@ -77,7 +77,9 @@ export const register: Register = (on, rawOptions) => {
         'They appear as numbered buttons above the prompt; the user presses a digit to run one. Results (exit code, output tail) reach you ' +
         'with the user\'s next prompt, and a failed command is usually sent to you right away so you can fix it: when one fails, find the ' +
         'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
-        'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript.',
+        'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
+        'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
+        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits every answer as their next prompt.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -115,8 +117,35 @@ export const register: Register = (on, rawOptions) => {
               required: ['label', 'command'],
             },
           },
+          choices: {
+            type: 'array',
+            description:
+              'Questions the user answers by picking options, shown under the actions and sent together as the user\'s next prompt. ' +
+              'Use them for decisions; keep `reply` actions for a single go-ahead.',
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string', description: 'The question, short, e.g. "Default for the Ideas tab".' },
+                multi: {
+                  type: 'boolean',
+                  description: 'false (default): radio, exactly one answer. true: checkboxes, any number of answers.',
+                },
+                options: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', description: 'The answer as the user would say it, e.g. "Keep it off by default".' },
+                      description: { type: 'string', description: 'Optional: one short line on what it means.' },
+                    },
+                    required: ['label'],
+                  },
+                },
+              },
+              required: ['question', 'options'],
+            },
+          },
         },
-        required: ['actions'],
       },
     })
     await $.command.register({
@@ -141,16 +170,26 @@ export const register: Register = (on, rawOptions) => {
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const given = Array.isArray(e.actions) ? (e.actions as unknown[]) : []
     const actions = given.map((raw, i) => fromTool(raw, i)).filter((a): a is Action => a !== null)
-    if (actions.length === 0) {
-      return { deny: 'request_user_action needs a non-empty "actions" list with a "command" on each.' }
+    const asked = Array.isArray(e.choices) ? (e.choices as unknown[]) : []
+    const choices = asked.map((raw, i) => choiceFromTool(raw, i)).filter((c): c is Choice => c !== null)
+    if (actions.length === 0 && choices.length === 0) {
+      return {
+        deny: 'request_user_action needs a non-empty "actions" list with a "command" on each, or "choices" with a question and at least two options each.',
+      }
     }
 
     hasToolDeckThisTurn = true
-    const summary = typeof e.summary === 'string' && e.summary.trim() ? e.summary.trim() : `${actions.length} to run`
-    await replaceDeck($, { source: 'tool', summary, actions, isHidden: false })
+    const summary =
+      typeof e.summary === 'string' && e.summary.trim()
+        ? e.summary.trim()
+        : actions.length > 0
+          ? `${actions.length} to run`
+          : `${choices.length} to answer`
+    await replaceDeck($, { source: 'tool', summary, actions, ...(choices.length > 0 ? { choices } : {}), isHidden: false })
 
+    const parts = [actions.length > 0 ? `${actions.length} action(s)` : '', choices.length > 0 ? `${choices.length} choice(s)` : ''].filter(Boolean)
     return {
-      result: `Queued ${actions.length} action(s) as buttons above the user's prompt. Their results will arrive with the user's next prompt; do not wait for them now.`,
+      result: `Queued ${parts.join(' and ')} above the user's prompt. Their results and answers will arrive with the user's next prompt; do not wait for them now.`,
     }
   })
 
@@ -179,7 +218,7 @@ export const register: Register = (on, rawOptions) => {
     // A new prompt instead of /clear: the offer is withdrawn, and made again
     // at the end of the turn while the context is still that full.
     let current = await update($, deck, d => (d ? { ...d, actions: d.actions.filter(a => a.id !== CLEAR_ID) } : d))
-    if (current && current.actions.length === 0) {
+    if (current && current.actions.length === 0 && !hasOpenChoices(current)) {
       await clearDeck($)
       current = null
     }
@@ -195,7 +234,7 @@ export const register: Register = (on, rawOptions) => {
         d ? { ...d, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) } : d,
       )
       // Everything ran and Claude has it: the deck has done its job.
-      if (after && after.actions.every(a => a.isReported)) await clearDeck($)
+      if (after && after.actions.every(a => a.isReported) && !hasOpenChoices(after)) await clearDeck($)
     }
 
     return entered
@@ -254,8 +293,8 @@ export const register: Register = (on, rawOptions) => {
     const row = /^deck-([1-9])$/.exec(name)
     if (row) {
       const current = await read($, deck)
-      const action = current?.actions[Number(row[1]) - 1]
-      if (action) await press($, action.id, undefined)
+      const target = current ? rowsOf(current)[Number(row[1]) - 1] : undefined
+      if (target) await pressRow($, target, undefined)
       return {}
     }
     return next(e)
@@ -265,14 +304,17 @@ export const register: Register = (on, rawOptions) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, deck)
-    if (e.props.hasSurvey || !current || current.actions.length === 0) return next(e)
+    if (e.props.hasSurvey || !current || (current.actions.length === 0 && !hasOpenChoices(current))) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
 
     if (current.isHidden) {
       const left = current.actions.filter(a => a.status === 'pending' || a.status === 'armed' || a.status === 'running').length
       const failed = current.actions.filter(a => a.status === 'failed').length
-      const counts = [left > 0 ? `${left} to run` : '', failed > 0 ? `${failed} failed` : ''].filter(Boolean).join(', ')
+      const asking = hasOpenChoices(current) ? (current.choices ?? []).length : 0
+      const counts = [left > 0 ? `${left} to run` : '', failed > 0 ? `${failed} failed` : '', asking > 0 ? `${asking} to answer` : '']
+        .filter(Boolean)
+        .join(', ')
       return (
         <Box paddingX={1} backgroundColor={options.background || undefined}>
           <Button key="unhide" plain dimColor onPress={() => void update($, deck, d => (d ? { ...d, isHidden: false } : d))}>
@@ -289,6 +331,9 @@ export const register: Register = (on, rawOptions) => {
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
     const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
+    const rows = rowsOf(current)
+    const sendAt = rows.findIndex(r => r.type === 'send')
+    const isComplete = (current.choices ?? []).every(c => c.isMulti || c.picked.length > 0)
 
     return (
       <Box flexDirection="column" paddingX={1} backgroundColor={options.background || undefined}>
@@ -314,6 +359,52 @@ export const register: Register = (on, rawOptions) => {
             {rowText(a, room)}
           </Button>
         ))}
+        {hasOpenChoices(current) &&
+          (current.choices ?? []).flatMap(c => [
+            <Text key={`${c.id}-q`} wrap="truncate-end">
+              <Text bold>{c.question}</Text>
+              <Text dimColor>{c.isMulti ? ' · pick any' : ' · pick one'}</Text>
+            </Text>,
+            ...c.options.map(o => {
+              const i = rows.findIndex(r => r.type === 'option' && r.choiceId === c.id && r.optionId === o.id)
+              const isPicked = c.picked.includes(o.id)
+              const mark = c.isMulti ? (isPicked ? '[x]' : '[ ]') : isPicked ? '(•)' : '( )'
+              const text = o.description ? `${o.label} · ${o.description}` : o.label
+              return (
+                <Button
+                  key={`${c.id}-${o.id}`}
+                  plain
+                  hotkey={i >= 0 && i < 9 ? String(i + 1) : undefined}
+                  onPress={() => void pickOption($, c.id, o.id)}
+                >
+                  <Text color={isPicked ? 'success' : undefined}>{mark.padEnd(STATUS_WIDTH)}</Text>{' '}
+                  <Text dimColor={!isPicked}>{shorten(text, room)}</Text>
+                </Button>
+              )
+            }),
+          ])}
+        {current.isAnswered &&
+          (current.choices ?? []).map(c => {
+            const labels = c.options.filter(o => c.picked.includes(o.id)).map(o => o.label)
+            return (
+              <Text key={`${c.id}-sent`} dimColor wrap="truncate-end">
+                <Text color="success">{'✓ sent'.padEnd(STATUS_WIDTH)}</Text> {shorten(`${c.question}: ${labels.join(', ') || 'none'}`, room)}
+              </Text>
+            )
+          })}
+        {hasOpenChoices(current) && !sendsOnPick(current) && (
+          <Button
+            key="send"
+            plain
+            hotkey={sendAt >= 0 && sendAt < 9 ? String(sendAt + 1) : undefined}
+            onPress={() => void sendAnswers($)}
+          >
+            <Text color={isComplete ? 'success' : 'warning'}>
+              {(isComplete ? 'send' : current.isSendArmed ? 'press again' : 'send ⚠').padEnd(STATUS_WIDTH)}
+            </Text>{' '}
+            <Text dimColor={!isComplete}>{isComplete ? 'send the answers' : 'send the answers (a pick-one question is unanswered)'}</Text>
+          </Button>
+        )}
         <Box gap={2}>
           {hasPending && (
             <Button key="all" plain hotkey="0" onPress={p => void runAll($, p.surface)}>
@@ -459,6 +550,55 @@ function fromTool(raw: unknown, i: number): Action | null {
   }
 }
 
+function choiceFromTool(raw: unknown, i: number): Choice | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const question = typeof r.question === 'string' ? r.question.trim() : ''
+  const given = Array.isArray(r.options) ? (r.options as unknown[]) : []
+  const options = given
+    .map((o, j) => {
+      const opt = (o && typeof o === 'object' ? o : {}) as Record<string, unknown>
+      const label = typeof o === 'string' ? o.trim() : typeof opt.label === 'string' ? opt.label.trim() : ''
+      if (!label) return null
+      const description = typeof opt.description === 'string' && opt.description.trim() ? opt.description.trim() : undefined
+      return description ? { id: `o${j + 1}`, label, description } : { id: `o${j + 1}`, label }
+    })
+    .filter((o): o is { id: string; label: string; description?: string } => o !== null)
+  if (!question || options.length < 2) return null
+  return { id: `c${i + 1}`, question, isMulti: r.multi === true, options, picked: [] }
+}
+
+/** Questions still waiting for their send row. */
+function hasOpenChoices(d: Deck): boolean {
+  return (d.choices ?? []).length > 0 && !d.isAnswered
+}
+
+type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; optionId: string } | { type: 'send' }
+
+/** Every numbered row of the band, in order: actions, then each choice's options, then send. */
+function rowsOf(d: Deck): Row[] {
+  const rows: Row[] = d.actions.map(a => ({ type: 'action', id: a.id }))
+  if (!hasOpenChoices(d)) return rows
+  for (const c of d.choices ?? []) for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
+  if (!sendsOnPick(d)) rows.push({ type: 'send' })
+  return rows
+}
+
+/** One pick-one question and nothing else to answer: the pick is the answer. */
+function sendsOnPick(d: Deck): boolean {
+  const choices = d.choices ?? []
+  return choices.length === 1 && choices[0]?.isMulti === false
+}
+
+function answersOf(d: Deck): string {
+  return (d.choices ?? [])
+    .map(c => {
+      const labels = c.options.filter(o => c.picked.includes(o.id)).map(o => o.label)
+      return `${c.question}: ${labels.length > 0 ? labels.join(', ') : c.isMulti ? 'none of them' : 'no answer'}`
+    })
+    .join('\n')
+}
+
 function indexOf(d: Deck, id: string): number {
   return d.actions.findIndex(a => a.id === id)
 }
@@ -590,7 +730,9 @@ async function deckFromReply($: EngineInterface, answer: string) {
 async function suggestClear($: EngineInterface) {
   if (options.suggestClear <= 0) return
   const current = await read($, deck)
-  const hasWork = current?.actions.some(a => a.id !== CLEAR_ID && (a.status === 'pending' || a.status === 'armed' || a.status === 'running'))
+  const hasWork =
+    (current && hasOpenChoices(current)) ||
+    current?.actions.some(a => a.id !== CLEAR_ID && (a.status === 'pending' || a.status === 'armed' || a.status === 'running'))
   if (hasWork || current?.actions.some(a => a.kind === 'slash' && /^\/clear\b/.test(a.command))) return
 
   const { context } = await $.session.usage()
@@ -710,6 +852,68 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
   await run($, action, surface)
 }
 
+async function pressRow($: EngineInterface, row: Row, surface: Surface | undefined) {
+  if (row.type === 'action') await press($, row.id, surface)
+  else if (row.type === 'option') await pickOption($, row.choiceId, row.optionId)
+  else await sendAnswers($)
+}
+
+// A radio pick replaces the group's answer; a checkbox pick toggles it. A
+// lone pick-one question is answered by the pick itself, with no send row.
+async function pickOption($: EngineInterface, choiceId: string, optionId: string) {
+  await update($, deck, d =>
+    d && !d.isAnswered
+      ? {
+          ...d,
+          choices: (d.choices ?? []).map(c =>
+            c.id !== choiceId
+              ? c
+              : c.isMulti
+                ? { ...c, picked: c.picked.includes(optionId) ? c.picked.filter(p => p !== optionId) : [...c.picked, optionId] }
+                : { ...c, picked: [optionId] },
+          ),
+        }
+      : d,
+  )
+  const now = await read($, deck)
+  if (now && hasOpenChoices(now) && sendsOnPick(now)) await sendAnswers($)
+}
+
+// The send row: the answers go in as the user's prompt. A plugin's own prompt
+// carries no context, so results not yet sent ride along in its text. A
+// pick-one question left unanswered arms the row first, like a risky command.
+async function sendAnswers($: EngineInterface) {
+  const current = await read($, deck)
+  if (!current || !hasOpenChoices(current)) return
+  const isComplete = (current.choices ?? []).every(c => c.isMulti || c.picked.length > 0)
+  if (!isComplete && !current.isSendArmed) {
+    await update($, deck, d => (d ? { ...d, isSendArmed: true } : d))
+    $.ui.toast('A pick-one question has no answer: press send again to send anyway', { timeoutMs: 4000 })
+    $.clock.after(8000, () => {
+      void update($, deck, d => (d && d.isSendArmed ? { ...d, isSendArmed: false } : d))
+    })
+    return
+  }
+  const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
+  await update($, deck, d =>
+    d
+      ? {
+          ...d,
+          isAnswered: true,
+          isSendArmed: false,
+          actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)),
+        }
+      : d,
+  )
+  if ((await $.ui.panes()).some(p => p.id === PANE)) await $.ui.close({ id: PANE })
+  const answers = answersOf(current)
+  const text = finished.length > 0 ? `${answers}\n\n${reportOf(current, finished)}` : answers
+  void $.prompt.submit({ text })
+  const after = await read($, deck)
+  if (after && after.actions.every(a => a.isReported || a.kind === 'reply' || a.kind === 'slash')) await clearDeck($)
+  else await afterChange($)
+}
+
 async function tick($: EngineInterface, id: string) {
   await setAction($, id, a => ({ ...a, status: a.status === 'done' ? 'pending' : 'done', tail: 'the user ticked it off' }))
   await afterChange($)
@@ -818,13 +1022,16 @@ async function sendReply($: EngineInterface, action: Action) {
     d
       ? {
           ...d,
-          actions: d.actions.map(a =>
-            a.id === action.id
-              ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
-              : finished.some(f => f.id === a.id)
-                ? { ...a, isReported: true }
-                : a,
-          ),
+          // the other go-aheads were alternatives to this one: they go
+          actions: d.actions
+            .filter(a => a.id === action.id || !(a.kind === 'reply' && a.status === 'pending'))
+            .map(a =>
+              a.id === action.id
+                ? { ...a, status: 'done' as const, tail: 'sent', isReported: true }
+                : finished.some(f => f.id === a.id)
+                  ? { ...a, isReported: true }
+                  : a,
+            ),
         }
       : d,
   )
@@ -957,10 +1164,18 @@ async function afterChange($: EngineInterface) {
   const left = current.actions.filter(a => a.kind !== 'slash' && a.kind !== 'reply' && (a.status === 'pending' || a.status === 'armed' || a.status === 'running')).length
   $.ui.status(left > 0 ? `run deck: ${left} to run` : undefined)
 
-  const hasUnreported = current.actions.some(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
-  if (options.autoContinue && left === 0 && !isRunningAll && hasUnreported && !current.isContinued) {
-    await update($, deck, d => (d ? { ...d, isContinued: true } : d))
-    void $.prompt.submit({ text: 'The commands from your last reply have run; the results are attached. Continue.' })
+  // A pending reply or an unsent question is itself how the user carries on:
+  // its press sends the results along, so auto-continue waits for it.
+  const isAwaitingAnswer = hasOpenChoices(current) || current.actions.some(a => a.kind === 'reply' && a.status === 'pending')
+  const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
+  if (options.autoContinue && left === 0 && !isRunningAll && finished.length > 0 && !isAwaitingAnswer && !current.isContinued) {
+    // A plugin's own prompt carries no context, so the results go in its text.
+    await update($, deck, d =>
+      d
+        ? { ...d, isContinued: true, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) }
+        : d,
+    )
+    void $.prompt.submit({ text: `The commands from your last reply have run. Continue.\n\n${reportOf(current, finished)}` })
   }
 }
 
