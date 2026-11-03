@@ -1290,14 +1290,23 @@ async function afterChange($: EngineInterface) {
   const isAwaitingAnswer = hasOpenChoices(current) || current.actions.some(a => a.kind === 'reply' && a.status === 'pending')
   const finished = current.actions.filter(a => !a.isReported && (a.status === 'done' || a.status === 'failed'))
   if (options.autoContinue && left === 0 && !isRunningAll && finished.length > 0 && !isAwaitingAnswer && !current.isContinued) {
-    // A plugin's own prompt carries no context, so the results go in its text.
-    await update($, deck, d =>
-      d
-        ? { ...d, isContinued: true, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) }
-        : d,
-    )
-    void $.prompt.submit({ text: `The commands from your last reply have run. Continue.\n\n${reportOf(current, finished)}` })
+    // Once per deck. The prompt goes in after the hook that ran the last row
+    // returns: a /deck-N press is a command.run hook, and the engine refuses
+    // $.prompt.submit from one, whose turn it holds.
+    await update($, deck, d => (d ? { ...d, isContinued: true } : d))
+    $.clock.after(0, () => void autoContinue($, current, finished))
   }
+}
+
+// A plugin's own prompt carries no context, so the results go in its text.
+// They count as reported only once the prompt entered; a refused one leaves
+// them for the person's next prompt, which carries them as context.
+async function autoContinue($: EngineInterface, current: Deck, finished: Action[]) {
+  if (!(await submitted($, `The commands from your last reply have run. Continue.\n\n${reportOf(current, finished)}`))) return
+  const after = await update($, deck, d =>
+    d ? { ...d, actions: d.actions.map(a => (finished.some(f => f.id === a.id) ? { ...a, isReported: true } : a)) } : d,
+  )
+  if (after && after.actions.every(a => a.isReported) && !hasOpenChoices(after)) await clearDeck($)
 }
 
 async function resolveCwd($: EngineInterface, cwd: string | undefined): Promise<string> {
