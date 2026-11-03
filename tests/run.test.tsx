@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const BAND = {
   plugin: 'run-deck',
@@ -241,4 +241,37 @@ test('a reply the session does not take goes back to pending, and the press can 
   await ui.press({ key: 't1' })
   expect(seen.prompts.length).toBe(2)
   await ui.unmount()
+})
+
+test('auto-continue sends the results when the last row ran from a digit shortcut', { options: { auto_continue: true } }, async ($, on) => {
+  const seen = stubEngine(on, [])
+  const clock = mock.clock(on)
+  await start($)
+
+  // each press comes in as /deck-N, a command.run hook
+  await $.command.run({ command: 'deck-1', args: '' })
+  await $.command.run({ command: 'deck-2', args: '' })
+  await clock.advance(0)
+  expect(seen.spawns).toEqual(['npm test', 'npm run build'])
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]!.text).toStartWith('The commands from your last reply have run. Continue.')
+  expect(seen.prompts[0]!.text).toContain('npm run build')
+})
+
+test('an auto-continue the session does not take leaves the results for the next prompt', { options: { auto_continue: true } }, async ($, on) => {
+  const seen = stubEngine(on, [], 'a Stop hook stands')
+  const clock = mock.clock(on)
+  await start($)
+
+  await $.command.run({ command: 'deck-1', args: '' })
+  await $.command.run({ command: 'deck-2', args: '' })
+  await clock.advance(0)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.toasts.some(t => t.includes('a Stop hook stands'))).toBe(true)
+
+  // the person's own next prompt still carries both results
+  await $.prompt.submit({ text: 'what happened?' })
+  const last = seen.prompts[seen.prompts.length - 1]!
+  expect(last.text).toBe('what happened?')
+  expect((last.context ?? []).join('\n')).toContain('npm run build')
 })
