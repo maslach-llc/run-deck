@@ -16,12 +16,12 @@ const BAND = {
 
 const ANSWER = 'Done.\n\n## Run\n\n```bash\nnpm test\nnpm run build\n```\n'
 
-type Seen = { prompts: { text: string; context?: readonly string[] }[]; spawns: string[]; opened: string[] }
+type Seen = { prompts: { text: string; context?: readonly string[] }[]; spawns: string[]; opened: string[]; toasts: string[] }
 
 // Every hook beneath the plugin is registered before the first call on `$`.
 // `fail` names the commands the fake shell exits 1 on.
-function stubEngine(on: any, fail: string[]): Seen {
-  const seen: Seen = { prompts: [], spawns: [], opened: [] }
+function stubEngine(on: any, fail: string[], drop?: string): Seen {
+  const seen: Seen = { prompts: [], spawns: [], opened: [], toasts: [] }
   on('tool.register', () => ({ value: { tool: 'mcp__run-deck__request_user_action' } }))
   on('command.register', () => ({ value: { command: 'deck' } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
@@ -29,7 +29,10 @@ function stubEngine(on: any, fail: string[]): Seen {
   on('turn.complete', (_: any, e: any) => ({ text: e.answer }))
   on('ui.status', () => ({ value: undefined }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, tokens: 20000, percent: 10 }, rateLimits: [] } }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_: any, e: any) => {
+    seen.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.copy', () => ({ value: { isCopied: true } }))
   on('ui.open', (_: any, e: any) => {
     seen.opened.push(e.id)
@@ -41,7 +44,7 @@ function stubEngine(on: any, fail: string[]): Seen {
   on('fs.exists', () => ({ value: false }))
   on('prompt.submit', (_: any, e: any) => {
     seen.prompts.push({ text: e.text, context: e.context })
-    return { text: e.text }
+    return drop === undefined ? { text: e.text } : { drop }
   })
   on('process.spawn', async function* (_: any, e: any) {
     const command = e.argv[2] as string
@@ -215,5 +218,30 @@ test('a reply row sends its text as the prompt with one press, and run all skips
   // A sent reply is not sent twice.
   await ui.press({ key: 't2' })
   expect(seen.prompts.length).toBe(1)
+  await ui.unmount()
+})
+
+test('a reply the session does not take goes back to pending, and the press can be made again', async ($, on) => {
+  const seen = stubEngine(on, [], 'a Stop hook stands')
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.tool.call({
+    tool: 'mcp__run-deck__request_user_action',
+    summary: 'go-ahead',
+    actions: [{ label: 'Yes: commit it', command: 'yes: commit it', kind: 'reply' }],
+  })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 't1' })
+  expect(seen.prompts.length).toBe(1)
+  expect((await ui.find({ key: 't1' }))?.text).not.toContain('✓ sent')
+  expect(seen.toasts.some(t => t.includes('a Stop hook stands'))).toBe(true)
+
+  // Not marked sent, so a second press tries again.
+  await ui.press({ key: 't1' })
+  expect(seen.prompts.length).toBe(2)
   await ui.unmount()
 })
