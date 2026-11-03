@@ -29,7 +29,8 @@ export type ChoiceOption = {
 
 /**
  * A question with options: `isMulti` false is a radio group (pick one),
- * true a checkbox group (pick any). Picks are sent together by the send row.
+ * true a checkbox group (pick any). The send row sends the answered ones;
+ * an unanswered question stays open for a later send.
  */
 export type Choice = {
   id: string
@@ -38,6 +39,8 @@ export type Choice = {
   options: ChoiceOption[]
   /** The ids of the picked options. */
   picked: string[]
+  /** The answer went to Claude; the question is shown as one sent line. */
+  isSent?: boolean
 }
 
 export type Deck = {
@@ -46,10 +49,6 @@ export type Deck = {
   actions: Action[]
   /** Questions the user answers with radio or checkbox rows under the actions. */
   choices?: Choice[]
-  /** The answers to `choices` went to Claude. */
-  isAnswered?: boolean
-  /** Send was pressed with a pick-one question unanswered; a second press sends anyway. */
-  isSendArmed?: boolean
   isHidden: boolean
   isContinued?: boolean
   /** Run all was pressed once over a risky command; a second press runs everything. */

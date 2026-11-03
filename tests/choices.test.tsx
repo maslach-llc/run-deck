@@ -45,7 +45,7 @@ function stubEngine(on: any): Seen {
   return seen
 }
 
-test('a lone pick-one question sends on the pick and marks every option', async ($, on) => {
+test('a lone pick-one question sends on the pick and shrinks to its answer', async ($, on) => {
   const seen = stubEngine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.tool.call({
@@ -63,15 +63,15 @@ test('a lone pick-one question sends on the pick and marks every option', async 
 
   await ui.press({ key: 'c1-o2' })
   expect(seen.prompts).toEqual(['Default for Ideas: On in Ideas'])
-  // the manual step is still to do, so the deck stays, every option marked
-  expect((await ui.find({ type: 'Text', text: /\(•\) sent/ }))?.text).toContain('On in Ideas')
-  expect((await ui.find({ type: 'Text', text: /\( \) skip/ }))?.text).toContain('Off by default')
-  // and none is a button any more
+  // the manual step is still to do, so the deck stays, the question one sent line
+  expect((await ui.find({ type: 'Text', text: /✓ sent.*On in Ideas/ }))?.text).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^Default for Ideas/ }))?.text).toBe('Default for Ideas · sent')
+  // and no option is a button any more
   expect(await ui.find({ key: 'c1-o1', type: 'Button' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('checkboxes toggle, radios replace, and the send row sends every answer once', async ($, on) => {
+test('checkboxes toggle, radios replace, and send sends the answered questions and keeps the rest', async ($, on) => {
   const seen = stubEngine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.tool.call({
@@ -79,21 +79,21 @@ test('checkboxes toggle, radios replace, and the send row sends every answer onc
     choices: [
       { question: 'Ship to', multi: true, options: ['staging', 'prod', 'preview'] },
       { question: 'Tag', options: [{ label: 'patch' }, { label: 'minor' }] },
+      { question: 'Notes', options: [{ label: 'short' }, { label: 'long' }] },
     ],
   })
 
   const ui = await $.ui.mount(BAND)
+  // nothing picked: send sends nothing
+  await ui.press({ key: 'send' })
+  expect(seen.prompts).toEqual([])
+  expect((await ui.find({ key: 'send' }))?.text).toContain('pick an answer first')
+
   await ui.press({ key: 'c1-o1' })
   await ui.press({ key: 'c1-o3' })
   await ui.press({ key: 'c1-o1' })
   expect((await ui.find({ key: 'c1-o1' }))?.text).toContain('[ ]')
   expect((await ui.find({ key: 'c1-o3' }))?.text).toContain('[x]')
-
-  // send with the pick-one question open arms first and sends nothing
-  await ui.press({ key: 'send' })
-  expect(seen.prompts).toEqual([])
-  expect((await ui.find({ key: 'send' }))?.text).toContain('press again')
-
   await ui.press({ key: 'c2-o1' })
   await ui.press({ key: 'c2-o2' })
   expect((await ui.find({ key: 'c2-o1' }))?.text).toContain('( )')
@@ -101,8 +101,17 @@ test('checkboxes toggle, radios replace, and the send row sends every answer onc
   // a pick-one question among others waits for send rather than sending
   expect(seen.prompts).toEqual([])
 
+  // Notes is unanswered: send sends the other two and leaves it open
   await ui.press({ key: 'send' })
   expect(seen.prompts).toEqual(['Ship to: preview\nTag: minor'])
+  expect((await ui.find({ type: 'Text', text: /✓ sent.*preview/ }))?.text).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /✓ sent.*minor/ }))?.text).toBeDefined()
+  expect((await ui.find({ key: 'c3-o1' }))?.props.hotkey).toBe('1')
+  // the one open pick-one question now sends on the pick, and the deck is done
+  expect((await ui.find({ type: 'Text', text: /^Notes/ }))?.text).toBe('Notes · pick one, it sends')
+  await ui.press({ key: 'c3-o2' })
+  expect(seen.prompts).toEqual(['Ship to: preview\nTag: minor', 'Notes: long'])
+  expect(await ui.find({ type: 'Text', text: /^Notes/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -121,25 +130,37 @@ test('digits number the options after the actions, and the send row last', async
   await ui.unmount()
 })
 
-test('pressing one reply marks the other replies not picked', async ($, on) => {
+test('pressing one reply leaves the others to press, and the deck clears when all are sent', async ($, on) => {
   const seen = stubEngine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.tool.call({
     tool: 'mcp__run-deck__request_user_action',
     actions: [
-      { label: 'npm test', command: 'npm test', kind: 'shell' },
-      { label: 'Yes', command: 'yes: do it', kind: 'reply' },
-      { label: 'No', command: 'no: leave it', kind: 'reply' },
+      { label: 'Back up the env', command: 'yes: back up the env', kind: 'reply' },
+      { label: 'Set the recipients', command: 'yes: set the recipients', kind: 'reply' },
     ],
+    choices: [{ question: 'Commit', multi: true, options: ['docs', 'code'] }],
   })
   const ui = await $.ui.mount(BAND)
-  await ui.press({ key: 't3' })
-  expect(seen.prompts).toEqual(['no: leave it'])
-  expect((await ui.find({ key: 't2' }))?.text).toContain('( ) skip')
-  expect((await ui.find({ key: 't3' }))?.text).toContain('(•) sent')
-  // a not-picked reply never sends
   await ui.press({ key: 't2' })
-  expect(seen.prompts).toEqual(['no: leave it'])
+  expect(seen.prompts).toEqual(['yes: set the recipients'])
+  expect((await ui.find({ key: 't2' }))?.text).toContain('sent')
+  // the other reply and the question are still there to answer
+  expect((await ui.find({ key: 't1' }))?.text).not.toContain('sent')
+  expect((await ui.find({ key: 'c1-o1' }))?.props.hotkey).toBeDefined()
+
+  // a typed prompt in between does not take them away
+  await $.prompt.submit({ text: 'what does the second one do?' })
+  expect((await ui.find({ key: 't1' }))?.text).toContain('Back up the env')
+
+  await ui.press({ key: 't1' })
+  expect(seen.prompts.at(-1)).toBe('yes: back up the env')
+  expect((await ui.find({ key: 'c1-o1' }))?.props.hotkey).toBeDefined()
+  await ui.press({ key: 'c1-o1' })
+  await ui.press({ key: 'send' })
+  expect(seen.prompts.at(-1)).toBe('Commit: docs')
+  // everything answered: the deck is gone
+  expect(await ui.find({ key: 't1' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -158,13 +179,12 @@ test('related rows sit under headings, replies after commands, and run all count
   })
   const ui = await $.ui.mount(BAND)
   expect((await ui.find({ type: 'Text', text: /^Commands/ }))?.text).toBe('Commands')
-  expect((await ui.find({ type: 'Text', text: /^Reply/ }))?.text).toBe('Reply · pick one, it sends')
+  expect((await ui.find({ type: 'Text', text: /^Reply/ }))?.text).toBe('Reply · one press sends it')
   expect((await ui.find({ type: 'Text', text: /^Also/ }))?.text).toBe('Also · pick any')
   // numbered in the order drawn: commands, replies, options, send
   expect((await ui.find({ key: 't2' }))?.props.hotkey).toBe('1')
   expect((await ui.find({ key: 't3' }))?.props.hotkey).toBe('2')
   expect((await ui.find({ key: 't1' }))?.props.hotkey).toBe('3')
-  expect((await ui.find({ key: 't1' }))?.text).toContain('( )')
   expect((await ui.find({ key: 't4' }))?.props.hotkey).toBe('4')
   expect((await ui.find({ key: 'c1-o1' }))?.props.hotkey).toBe('5')
   expect((await ui.find({ key: 'send' }))?.props.hotkey).toBe('7')
