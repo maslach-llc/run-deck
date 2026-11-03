@@ -19,10 +19,36 @@ export type Action = {
   isReported: boolean
 }
 
+/** One option of a choice. */
+export type ChoiceOption = {
+  id: string
+  label: string
+  description?: string
+}
+
+/**
+ * A question with options: `isMulti` false is a radio group (pick one),
+ * true a checkbox group (pick any). Picks are sent together by the send row.
+ */
+export type Choice = {
+  id: string
+  question: string
+  isMulti: boolean
+  options: ChoiceOption[]
+  /** The ids of the picked options. */
+  picked: string[]
+}
+
 export type Deck = {
   source: 'tool' | 'reply'
   summary: string
   actions: Action[]
+  /** Questions the user answers with radio or checkbox rows under the actions. */
+  choices?: Choice[]
+  /** The answers to `choices` went to Claude. */
+  isAnswered?: boolean
+  /** Send was pressed with a pick-one question unanswered; a second press sends anyway. */
+  isSendArmed?: boolean
   isHidden: boolean
   isContinued?: boolean
   /** Run all was pressed once over a risky command; a second press runs everything. */
