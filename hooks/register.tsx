@@ -771,7 +771,7 @@ function chip(a: Action): string {
       return (a.kind === 'slash' ? '✗ failed' : `✗ exit ${a.exitCode ?? '?'}`).slice(0, STATUS_WIDTH)
     default:
       if (a.kind === 'interactive') return 'opens tmux'
-      if (a.kind === 'manual') return 'to do'
+      if (a.kind === 'manual') return 'todo'
       if (a.kind === 'reply') return 'sends it'
       return a.risk === 'risky' ? 'not run ⚠' : 'not run'
   }
