@@ -74,13 +74,14 @@ export const register: Register = (on, rawOptions) => {
       isDeferred: false,
       description:
         'Hand the user commands they must run themselves (interactive logins, things you cannot or should not run, manual steps). ' +
-        'They appear as numbered buttons above the prompt; the user presses a digit to run one. Results (exit code, output tail) reach you ' +
+        'They appear in the run deck, numbered rows the user presses by digit. Results (exit code, output tail) reach you ' +
         'with the user\'s next prompt, and a failed command is usually sent to you right away so you can fix it: when one fails, find the ' +
         'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
         'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
         'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
         'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits the answered questions as their next prompt; an unanswered one stays open for later. ' +
-        'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one").',
+        'Follow-ups the user could want in any combination (commit, file the todo, send a test) are one checkbox question, not several reply actions and never an extra "do both" option; a single go-ahead on its own can be one reply action. ' +
+        'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one"); when you must point at it, call it the run deck ("in the run deck", "the run deck\'s choices"), never "above the prompt". If a pick the user made in the run deck did not arrive, ask with your own question tool instead of re-queueing the same choice.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -190,7 +191,7 @@ export const register: Register = (on, rawOptions) => {
 
     const parts = [actions.length > 0 ? `${actions.length} action(s)` : '', choices.length > 0 ? `${choices.length} choice(s)` : ''].filter(Boolean)
     return {
-      result: `Queued ${parts.join(' and ')} above the user's prompt. Their results and answers will arrive with the user's next prompt; do not wait for them now.`,
+      result: `Queued ${parts.join(' and ')} in the run deck. Their results and answers will arrive with the user's next prompt; do not wait for them now. Refer to it as the run deck, never "above the prompt".`,
     }
   })
 
