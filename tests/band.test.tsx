@@ -78,7 +78,7 @@ test('a manual action opens its details on press, ticks off with d and is report
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /Finish the setup/ }))?.text).toContain('Finish the setup')
   await ui.press({ key: 't1' })
-  expect((await ui.find({ key: 't1' }))?.text).toContain('to do')
+  expect((await ui.find({ key: 't1' }))?.text).toContain('todo')
 
   const pane = await $.ui.mount(PANE)
   expect((await pane.find({ type: 'Text', text: /enable the Maps API/ }))?.text).toBe('Open the console and enable the Maps API')
