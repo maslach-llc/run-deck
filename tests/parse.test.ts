@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { classifyKind, classifyRisk, lastShellBlock, parseBlock } from '../hooks/parse'
+import { classifyKind, classifyRisk, lastShellBlock, parseBlock, stepKey } from '../hooks/parse'
 
 const REPLY = `## Summary
 
@@ -59,4 +59,16 @@ test('classifiers', async () => {
   expect(classifyRisk('ls -la')).toBe('safe')
   expect(classifyKind('nvim .')).toBe('interactive')
   expect(classifyKind('npm run lint')).toBe('shell')
+})
+
+test('stepKey walks the rows and stops at the ends', () => {
+  const keys = ['t1', 'c1-o1', 'c1-o2', 'send']
+  expect(stepKey(keys, null, 1)).toBe('t1')
+  expect(stepKey(keys, null, -1)).toBe('send')
+  expect(stepKey(keys, 'move-down', 1)).toBe('t1')
+  expect(stepKey(keys, 't1', 1)).toBe('c1-o1')
+  expect(stepKey(keys, 'c1-o2', -1)).toBe('c1-o1')
+  expect(stepKey(keys, 'send', 1)).toBe('send')
+  expect(stepKey(keys, 't1', -1)).toBe('t1')
+  expect(stepKey([], null, 1)).toBeUndefined()
 })

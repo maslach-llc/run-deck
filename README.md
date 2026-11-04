@@ -41,6 +41,8 @@ Answer `y` to add the marketplace, then pick a scope (user is the usual one).
 
 Digits `1`–`9` run a command (or, once it has run, open its output) and `0` runs them all, from an empty prompt. The letter keys (`i` details, `c` copy the block, `x` dismiss) need the band focused: `ctrl+x tab`, or a click. In the pane: `n` / `p` next and previous row, `d` tick off a manual step, `r` run again, `f` ask Claude to fix, `q` or Esc close. `x` folds the deck to one row that names the key to bring it back. `/deck show` brings a dismissed deck back, `/deck clear` drops it, `/deck` toggles the output pane.
 
+With the band focused, Tab walks its rows, the arrows scroll it, Enter presses the row the ring is on and Esc gives the keys back to the prompt (the deck stays). Turn on `vim_keys` and `j` / `k` walk the rows instead, stopping at the first and last, with the band scrolling to keep the row in view.
+
 Bare digits only work while the prompt is empty. To press a row while you are typing, bind the mod's shortcut commands in `~/.claude/keybindings.json` (`/keybindings` opens it); Alt plus a digit is free in most terminals:
 
 ```json
@@ -76,6 +78,7 @@ Set in `/config` or at install time:
 | `copy` | copy the whole block to the clipboard too | `false` |
 | `auto_continue` | send the results to Claude without waiting for your next prompt | `false` |
 | `suggest_clear` | context fill, in percent, at which a finished turn offers `/clear`; `0` never | `60` |
+| `vim_keys` | with the band focused, `j` / `k` move between rows | `false` |
 
 ## Developing
 

@@ -146,3 +146,15 @@ export function shorten(command: string, max = 60): string {
   const oneLine = command.replace(/\s*\n\s*/g, ' ')
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine
 }
+
+/**
+ * The key one step from `at` in `keys`, stopping at either end. From nowhere
+ * (no focus yet, or on a key that is not a row) down starts at the first and
+ * up at the last. Undefined when there are no keys.
+ */
+export function stepKey(keys: readonly string[], at: string | null, by: 1 | -1): string | undefined {
+  if (keys.length === 0) return undefined
+  const i = at === null ? -1 : keys.indexOf(at)
+  if (i < 0) return by > 0 ? keys[0] : keys[keys.length - 1]
+  return keys[Math.max(0, Math.min(keys.length - 1, i + by))]
+}

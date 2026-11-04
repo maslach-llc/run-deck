@@ -149,3 +149,22 @@ test('details shows the whole command and its why, and steps through the rows', 
   expect((await pane.find({ type: 'Text', text: /GH_READ_TOKEN/ }))?.text).toContain('1. $ ')
   await pane.unmount()
 })
+
+test('with vim_keys the band draws j / k buttons', { options: { vim_keys: true } }, async ($, on) => {
+  stubEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: ANSWER, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answered' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ key: 'move-down' }))?.text).toContain('down')
+  expect((await ui.find({ key: 'move-up' }))?.text).toContain('up')
+  await ui.unmount()
+})
+
+test('without vim_keys the band draws no j / k buttons', async ($, on) => {
+  stubEngine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: ANSWER, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answered' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'move-down' })).toBeUndefined()
+  await ui.unmount()
+})
