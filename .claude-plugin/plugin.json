@@ -1,6 +1,6 @@
 {
   "name": "run-deck",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "description": "Turns the commands Claude asks you to run into numbered buttons above the prompt: press a digit to run one, see the exit code, and the output rides back to Claude with your next prompt.",
   "author": {
     "name": "Maslach LLC",
