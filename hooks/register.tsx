@@ -300,10 +300,11 @@ export const register: Register = (on, rawOptions) => {
       const current = await read($, deck)
       const target = current ? rowsOf(current)[Number(row[1]) - 1] : undefined
       if (!target || !current) return {}
-      // A row that submits a prompt (the send row, a reply, a pick-one option
-      // that sends on the pick) runs after this hook returns: the engine
-      // refuses $.prompt.submit from a command.run hook, whose turn it holds.
-      if (submitsOnPress(current, target)) $.clock.after(0, () => void pressRow($, target, undefined))
+      // A row that submits a prompt (a send row, a reply, a pick-one option that
+      // sends on the pick) or runs a slash command runs after this hook returns:
+      // the engine refuses $.prompt.submit and $.command.run from a command.run
+      // hook, whose turn it holds.
+      if (defersPress(current, target)) $.clock.after(0, () => void pressRow($, target, undefined))
       else await pressRow($, target, undefined)
       return {}
     }
@@ -636,11 +637,12 @@ function choiceFromTool(raw: unknown, i: number): Choice | null {
   return { id: `c${i + 1}`, question, isMulti: r.multi === true, options, picked: [] }
 }
 
-/** Whether pressing `row` ends in $.prompt.submit. */
-function submitsOnPress(d: Deck, row: Row): boolean {
+/** Whether pressing `row` ends in $.prompt.submit or $.command.run. */
+function defersPress(d: Deck, row: Row): boolean {
   if (row.type === 'send') return true
   if (row.type === 'option') return sendsOnPick(d)
-  return d.actions.find(a => a.id === row.id)?.kind === 'reply'
+  const kind = d.actions.find(a => a.id === row.id)?.kind
+  return kind === 'reply' || kind === 'slash'
 }
 
 /** Questions not sent yet. */
