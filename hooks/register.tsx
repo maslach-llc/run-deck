@@ -349,7 +349,6 @@ export const register: Register = (on, rawOptions) => {
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
     const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
     const rows = rowsOf(current)
-    const hasAnswer = openChoices(current).some(c => c.picked.length > 0)
     const hotkeyOf = (row: Row): string | undefined => {
       const i = rows.findIndex(r => sameRow(r, row))
       return i >= 0 && i < 9 ? String(i + 1) : undefined
@@ -430,6 +429,18 @@ export const register: Register = (on, rawOptions) => {
           )
         }),
       })
+      if (!sendsOnPick(current)) {
+        // each question sends on its own, so they can be answered one at a time
+        const isAnswered = c.picked.length > 0
+        groups[groups.length - 1]!.rows.push(
+          <Button key={sendKey(c.id)} plain hotkey={hotkeyOf({ type: 'send', choiceId: c.id })} onPress={() => void sendAnswers($, c.id)}>
+            <Text color={isAnswered ? 'success' : undefined} dimColor={!isAnswered}>
+              {'send'.padEnd(STATUS_WIDTH)}
+            </Text>{' '}
+            <Text dimColor={!isAnswered}>{isAnswered ? 'send this answer' : 'pick an answer first'}</Text>
+          </Button>,
+        )
+      }
     }
     const hasHeads = groups.length > 1
 
@@ -456,19 +467,6 @@ export const register: Register = (on, rawOptions) => {
             </Box>
           </Box>
         ))}
-        {hasOpenChoices(current) && !sendsOnPick(current) && (
-          <Button
-            key="send"
-            plain
-            hotkey={hotkeyOf({ type: 'send' })}
-            onPress={() => void sendAnswers($)}
-          >
-            <Text color={hasAnswer ? 'success' : undefined} dimColor={!hasAnswer}>
-              {'send'.padEnd(STATUS_WIDTH)}
-            </Text>{' '}
-            <Text dimColor={!hasAnswer}>{hasAnswer ? 'send the answered questions; the rest stay open' : 'pick an answer first'}</Text>
-          </Button>
-        )}
         <Box gap={2}>
           {hasPending && pendingRunnable > 0 && (
             // run all leads the bottom row: it runs only the commands, never a reply or a question
@@ -676,7 +674,12 @@ const MOVE_UP = 'move-up'
 function keyOfRow(row: Row): string {
   if (row.type === 'action') return row.id
   if (row.type === 'option') return `${row.choiceId}-${row.optionId}`
-  return 'send'
+  return sendKey(row.choiceId)
+}
+
+/** The key of a question's send row. */
+function sendKey(choiceId: string): string {
+  return `${choiceId}-send`
 }
 
 /** j / k: move the band's focus ring one row down or up, stopping at the ends. */
@@ -689,23 +692,26 @@ async function moveFocus($: EngineInterface, by: 1 | -1): Promise<void> {
   if (!moved.deny) bandFocus = to
 }
 
-type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; optionId: string } | { type: 'send' }
+type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; optionId: string } | { type: 'send'; choiceId: string }
 
-/** Every numbered row of the band, in order: actions, then each choice's options, then send. */
+/** Every numbered row of the band, in order: actions, then each question's options and its send. */
 function rowsOf(d: Deck): Row[] {
   // the band's order: commands, then replies, then each question's options
   const ordered = [...d.actions.filter(a => a.kind !== 'reply'), ...d.actions.filter(a => a.kind === 'reply')]
   const rows: Row[] = ordered.map(a => ({ type: 'action', id: a.id }))
   if (!hasOpenChoices(d)) return rows
-  for (const c of openChoices(d)) for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
-  if (!sendsOnPick(d)) rows.push({ type: 'send' })
+  for (const c of openChoices(d)) {
+    for (const o of c.options) rows.push({ type: 'option', choiceId: c.id, optionId: o.id })
+    if (!sendsOnPick(d)) rows.push({ type: 'send', choiceId: c.id })
+  }
   return rows
 }
 
 function sameRow(a: Row, b: Row): boolean {
   if (a.type === 'action' && b.type === 'action') return a.id === b.id
   if (a.type === 'option' && b.type === 'option') return a.choiceId === b.choiceId && a.optionId === b.optionId
-  return a.type === b.type
+  if (a.type === 'send' && b.type === 'send') return a.choiceId === b.choiceId
+  return false
 }
 
 /** One pick-one question and nothing else open: the pick is the answer. */
@@ -981,7 +987,7 @@ async function press($: EngineInterface, id: string, surface: Surface | undefine
 async function pressRow($: EngineInterface, row: Row, surface: Surface | undefined) {
   if (row.type === 'action') await press($, row.id, surface)
   else if (row.type === 'option') await pickOption($, row.choiceId, row.optionId)
-  else await sendAnswers($)
+  else await sendAnswers($, row.choiceId)
 }
 
 // A radio pick replaces the group's answer; a checkbox pick toggles it. A
@@ -1005,15 +1011,15 @@ async function pickOption($: EngineInterface, choiceId: string, optionId: string
   if (now && hasOpenChoices(now) && sendsOnPick(now)) await sendAnswers($)
 }
 
-// The send row: the answered questions go in as the user's prompt, and the
-// unanswered ones stay open for a later send. A plugin's own prompt carries no
-// context, so results not yet sent ride along in its text.
-async function sendAnswers($: EngineInterface) {
+// A question's send row (`only`), or a lone pick-one's pick: the answer goes in as
+// the user's prompt, and the other questions stay open. A plugin's own prompt
+// carries no context, so results not yet sent ride along in its text.
+async function sendAnswers($: EngineInterface, only?: string) {
   const current = await read($, deck)
   if (!current) return
-  const ready = openChoices(current).filter(c => c.picked.length > 0)
+  const ready = openChoices(current).filter(c => c.picked.length > 0 && (only === undefined || c.id === only))
   if (ready.length === 0) {
-    if (hasOpenChoices(current)) $.ui.toast('Pick an answer first: send sends the answered questions', { timeoutMs: 4000 })
+    if (hasOpenChoices(current)) $.ui.toast('Pick an answer first', { timeoutMs: 4000 })
     return
   }
   const ids = new Set(ready.map(c => c.id))
