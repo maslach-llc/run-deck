@@ -9,7 +9,7 @@ When a reply ends with a ```bash block, or when Claude calls the `request_user_a
  1: opens tmux  gh auth login
  2: ✓ exit 0    npm run build
  3: not run ⚠   git push origin main
- 0: run all ⚠ (1)   i: details   c: copy   x: dismiss   finished row: its output
+ 0: run all ⚠ (1)   i: details   c: copy   x: dismiss
 ```
 
 ## Install

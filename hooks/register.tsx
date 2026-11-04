@@ -337,7 +337,6 @@ export const register: Register = (on, rawOptions) => {
     const room = Math.max(12, e.props.bodyColumns - 2 - 3 - STATUS_WIDTH - 1)
     const done = current.actions.filter(a => a.status === 'done').length
     const hasPending = current.actions.some(a => a.status === 'pending' || a.status === 'armed')
-    const hasFinished = current.actions.some(a => a.status === 'done' || a.status === 'failed')
     const hasRisky = current.actions.some(a => (a.status === 'pending' || a.status === 'armed') && isRunnable(a) && needsConfirm(a))
     const rows = rowsOf(current)
     const hasAnswer = openChoices(current).some(c => c.picked.length > 0)
@@ -482,11 +481,6 @@ export const register: Register = (on, rawOptions) => {
           <Button key="dismiss" plain hotkey="x" role="dismiss" onPress={() => void dismiss($)}>
             dismiss
           </Button>
-          {hasFinished && (
-            <Text dimColor wrap="truncate-end">
-              finished row: its output
-            </Text>
-          )}
         </Box>
       </Box>
     )
