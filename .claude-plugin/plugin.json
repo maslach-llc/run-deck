@@ -74,6 +74,12 @@
       "title": "Suggest /clear",
       "description": "When a turn ends with nothing left to run and the context is at least this full (percent), the deck offers /clear as its last row; 0 turns it off",
       "default": 60
+    },
+    "vim_keys": {
+      "type": "boolean",
+      "title": "Vim keys",
+      "description": "With the band focused (ctrl+x tab), j and k move between rows; Enter presses the one you are on",
+      "default": false
     }
   }
 }

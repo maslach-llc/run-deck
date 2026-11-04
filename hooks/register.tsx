@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, UiPressArgument } from 'claude-code'
 
 import type { Action, ActionKind, ActionRisk, Choice, Deck } from '../types'
-import { classifyKind, classifyRisk, lastShellBlock, parseBlock, shorten } from './parse'
+import { classifyKind, classifyRisk, lastShellBlock, parseBlock, shorten, stepKey } from './parse'
 
 const PANE = 'run-deck'
 const TOOL = 'request_user_action'
@@ -25,6 +25,8 @@ type Options = {
   background: string
   /** Context fill, in percent, at which a finished turn offers /clear; 0 never. */
   suggestClear: number
+  /** j / k move the band's focus ring between rows while the band is focused. */
+  vimKeys: boolean
 }
 
 // Module state: set again by register and session.start after a hot reload.
@@ -36,6 +38,7 @@ let options: Options = {
   autoContinue: false,
   background: '',
   suggestClear: 60,
+  vimKeys: false,
 }
 let sessionCwd = '.'
 let hasToolDeckThisTurn = false
@@ -50,6 +53,9 @@ let replyRows: { id: string; head: string }[] = []
 let answerRow: string | null = null
 // The key the person bound to `command:deck-hide`, for the hidden deck's row.
 let hideKey: string | null = null
+// The band's render instance and the row its focus ring is on, for j / k.
+let bandId: string | null = null
+let bandFocus: string | null = null
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 
@@ -62,6 +68,7 @@ export const register: Register = (on, rawOptions) => {
     autoContinue: rawOptions.auto_continue === true,
     background: typeof rawOptions.background === 'string' ? rawOptions.background.trim() : '',
     suggestClear: typeof rawOptions.suggest_clear === 'number' ? Math.max(0, Math.min(100, rawOptions.suggest_clear)) : 60,
+    vimKeys: rawOptions.vim_keys === true,
   }
 
   // ---------------------------------------------------------------- session
@@ -305,7 +312,15 @@ export const register: Register = (on, rawOptions) => {
 
   // ------------------------------------------------------------ the band
 
+  // Where the band's focus ring is, so j / k know which row to move from. The j / k
+  // buttons themselves are not rows: a press on one leaves the last row recorded.
+  on('ui.focus', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.element !== MOVE_DOWN && e.element !== MOVE_UP) bandFocus = e.element ?? null
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    bandId = e.requestId
     const current = await read($, deck)
     if (e.props.hasSurvey || !current || (current.actions.length === 0 && !hasOpenChoices(current))) return next(e)
 
@@ -476,6 +491,16 @@ export const register: Register = (on, rawOptions) => {
           <Button key="dismiss" plain hotkey="x" role="dismiss" onPress={() => void dismiss($)}>
             dismiss
           </Button>
+          {options.vimKeys && (
+            <Button key={MOVE_DOWN} plain hotkey="j" onPress={() => void moveFocus($, 1)}>
+              down
+            </Button>
+          )}
+          {options.vimKeys && (
+            <Button key={MOVE_UP} plain hotkey="k" onPress={() => void moveFocus($, -1)}>
+              up
+            </Button>
+          )}
         </Box>
       </Box>
     )
@@ -642,6 +667,26 @@ function isSettled(d: Deck): boolean {
       a.status === 'skipped' ||
       ((a.status === 'done' || a.status === 'failed') && a.isReported),
   )
+}
+
+const MOVE_DOWN = 'move-down'
+const MOVE_UP = 'move-up'
+
+/** The band Button key of a row, as the render draws it. */
+function keyOfRow(row: Row): string {
+  if (row.type === 'action') return row.id
+  if (row.type === 'option') return `${row.choiceId}-${row.optionId}`
+  return 'send'
+}
+
+/** j / k: move the band's focus ring one row down or up, stopping at the ends. */
+async function moveFocus($: EngineInterface, by: 1 | -1): Promise<void> {
+  const current = await read($, deck)
+  if (!current || !bandId) return
+  const to = stepKey(rowsOf(current).map(keyOfRow), bandFocus, by)
+  if (!to) return
+  const moved = await $.ui.focus({ requestId: bandId, key: to })
+  if (!moved.deny) bandFocus = to
 }
 
 type Row = { type: 'action'; id: string } | { type: 'option'; choiceId: string; optionId: string } | { type: 'send' }
