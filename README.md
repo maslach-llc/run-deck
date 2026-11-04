@@ -94,7 +94,7 @@ Set in `/config` or at install time:
 The tool is listed to Claude in every session, but a line in your `CLAUDE.md` makes it reliable:
 
 ```
-When you need me to run something myself, call request_user_action with every command in order, and still write the commands in the reply.
+When you need me to run something myself, call request_user_action with every command in order. Writing the commands in the reply as well is fine; the deck is only parsed from the text when the tool was not called.
 ```
 
 ## Who wrote this

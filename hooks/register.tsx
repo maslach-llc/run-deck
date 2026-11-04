@@ -73,16 +73,11 @@ export const register: Register = (on, rawOptions) => {
       name: TOOL,
       isDeferred: false,
       description:
-        'Hand the user commands they must run themselves (interactive logins, things you cannot or should not run, manual steps). ' +
-        'They appear in the run deck, numbered rows the user presses by digit. Results (exit code, output tail) reach you ' +
-        'with the user\'s next prompt, and a failed command is usually sent to you right away so you can fix it: when one fails, find the ' +
-        'cause, fix what you can yourself, and hand back only the commands still needed by calling this tool again. ' +
-        'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
-        'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
-        'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits the answered questions as their next prompt; an unanswered one stays open for later. ' +
-        'Any question you ask the user, in any message and not only the last (a yes, a go-ahead, a pick), gets a handle here: a reply action for a single go-ahead, a choice for anything else. ' +
-        'Follow-ups the user could want in any combination (commit, file the todo, send a test) are one checkbox question, not several reply actions and never an extra "do both" option; a single go-ahead on its own can be one reply action. ' +
-        'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one"); when you must point at it, call it the run deck ("in the run deck", "the run deck\'s choices"), never "above the prompt". If a pick the user made in the run deck did not arrive, ask with your own question tool instead of re-queueing the same choice.',
+        'Queue commands the user must run themselves (interactive logins, steps you cannot or should not run, manual steps) as numbered rows in the run deck. ' +
+        'Results reach you with the user\'s next prompt; a failed command usually comes back right away, so fix the cause and re-queue only what is still needed. ' +
+        'Call it at most once per reply, with every command in execution order. Commands may also appear in the reply text; the deck is not parsed from the text when the tool was called. ' +
+        'Optional: `choices` for a decision the user must make (radio when answers exclude each other, checkboxes when several may apply) and `reply` actions for a one-press go-ahead. ' +
+        'Use them when they save the user typing, not for every question. Keep labels short; the reply text carries the explanation. Refer to it as "the run deck".',
       inputSchema: {
         type: 'object',
         properties: {
