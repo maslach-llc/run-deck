@@ -29,8 +29,8 @@ export type ChoiceOption = {
 
 /**
  * A question with options: `isMulti` false is a radio group (pick one),
- * true a checkbox group (pick any). The send row sends the answered ones;
- * an unanswered question stays open for a later send.
+ * true a checkbox group (pick any). Each question has its own send row,
+ * so one can be answered while the others stay open.
  */
 export type Choice = {
   id: string
