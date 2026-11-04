@@ -80,6 +80,7 @@ export const register: Register = (on, rawOptions) => {
         'Call it once per reply, with every command, in execution order. Still write the same commands in your reply so they are readable in the transcript. ' +
         'For a decision, use `choices` instead of several reply actions: a radio group (multi false) when the answers exclude each other, ' +
         'checkboxes (multi true) when the user may pick several. The user picks with digits and a send row submits the answered questions as their next prompt; an unanswered one stays open for later. ' +
+        'Any question you ask the user, in any message and not only the last (a yes, a go-ahead, a pick), gets a handle here: a reply action for a single go-ahead, a choice for anything else. ' +
         'Follow-ups the user could want in any combination (commit, file the todo, send a test) are one checkbox question, not several reply actions and never an extra "do both" option; a single go-ahead on its own can be one reply action. ' +
         'The reply carries the context, the deck only the handles: before calling, explain in the message what each option or command does, what it changes and which you recommend, so the user can decide from the message alone; labels and option text are short names for what the message already explained. Never describe the deck itself (no "buttons above the prompt", no "press one"); when you must point at it, call it the run deck ("in the run deck", "the run deck\'s choices"), never "above the prompt". If a pick the user made in the run deck did not arrive, ask with your own question tool instead of re-queueing the same choice.',
       inputSchema: {
@@ -104,7 +105,7 @@ export const register: Register = (on, rawOptions) => {
                   type: 'string',
                   enum: ['shell', 'interactive', 'manual', 'slash', 'reply'],
                   description:
-                    'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal; the user ticks it off. ' +
+                    'shell: run in the background, output captured. interactive: needs the keyboard (logins, editors), opened in a tmux split. manual: a step outside the terminal (a restart, a dashboard click, a command on another machine), the full step as its command; the user ticks it off. ' +
                     'slash: a Claude Code slash command run in this session, such as /clear when the work is finished and what comes next is unrelated, or /compact with what to keep; list it last. ' +
                     "reply: a go-ahead the user can send with one press, e.g. 'yes: fix the blintz bug'; the command is the prompt text.",
                 },
