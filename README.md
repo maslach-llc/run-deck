@@ -77,6 +77,18 @@ Set in `/config` or at install time:
 | `auto_continue` | send the results to Claude without waiting for your next prompt | `false` |
 | `suggest_clear` | context fill, in percent, at which a finished turn offers `/clear`; `0` never | `60` |
 
+## Developing
+
+- Edit this checkout, never the installs under `~/.claude/plugins/` (they are replaced on update).
+- `claude plugin test .` runs the tests (no package.json); `claude plugin validate .` checks the
+  manifest. Timers in tests need `mock.clock(on)` and `clock.advance(0)` from `claude-code/testing`.
+- A digit press arrives as a `/deck-N` `command.run` hook. The engine refuses `$.prompt.submit`
+  from inside one (the hook holds the turn), so a row that submits (send, a reply, a pick-one that
+  sends) is deferred with `$.clock.after(0, …)` (`submitsOnPress`, since 0.9.2; auto-continue since
+  0.9.4).
+- A running session keeps the plugin version it started with: after an update, a long-running
+  session still has the old code until it is resumed (`claude --resume <id>`).
+
 ## Teaching Claude to use the tool
 
 The tool is listed to Claude in every session, but a line in your `CLAUDE.md` makes it reliable:
