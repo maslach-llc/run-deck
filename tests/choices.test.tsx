@@ -110,10 +110,11 @@ test('checkboxes toggle, radios replace, and each question sends on its own', as
   await ui.press({ key: 'c1-send' })
   expect(seen.prompts).toEqual(['Tag: minor', 'Ship to: preview'])
   expect((await ui.find({ key: 'c3-o1' }))?.props.hotkey).toBe('1')
-  // the one open pick-one question now sends on the pick, and the deck is done
-  expect((await ui.find({ type: 'Text', text: /^Notes/ }))?.text).toBe('Notes · pick one, it sends')
-  expect(await ui.find({ key: 'c3-send' })).toBeUndefined()
+  // the last open pick-one question keeps its send: rows do not change mid-deck
+  expect((await ui.find({ type: 'Text', text: /^Notes/ }))?.text).toBe('Notes · pick one')
   await ui.press({ key: 'c3-o2' })
+  expect(seen.prompts).toEqual(['Tag: minor', 'Ship to: preview'])
+  await ui.press({ key: 'c3-send' })
   expect(seen.prompts).toEqual(['Tag: minor', 'Ship to: preview', 'Notes: long'])
   expect(await ui.find({ type: 'Text', text: /^Notes/ })).toBeUndefined()
   await ui.unmount()

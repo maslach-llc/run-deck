@@ -714,10 +714,13 @@ function sameRow(a: Row, b: Row): boolean {
   return false
 }
 
-/** One pick-one question and nothing else open: the pick is the answer. */
+/**
+ * A deck that asks one pick-one question and no other: the pick is the answer. A deck
+ * that asked several keeps every send row, so none vanishes once the others are sent.
+ */
 function sendsOnPick(d: Deck): boolean {
-  const open = openChoices(d)
-  return open.length === 1 && open[0]?.isMulti === false
+  const all = d.choices ?? []
+  return all.length === 1 && all[0]?.isMulti === false && !all[0].isSent
 }
 
 function answersOf(choices: Choice[]): string {
