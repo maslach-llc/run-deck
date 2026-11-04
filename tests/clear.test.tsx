@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const BAND = {
   plugin: 'run-deck',
@@ -96,4 +96,19 @@ test('suggest_clear 0 turns the offer off', { options: { suggest_clear: 0 } }, a
   const ui = await $.ui.mount(BAND)
   expect(await ui.find({ key: 'clear' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('a slash row pressed by its digit runs after the command hook returns', async ($, on) => {
+  const ran = stubEngine(on, 10)
+  const clock = mock.clock(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.tool.call({
+    tool: 'mcp__run-deck__request_user_action',
+    actions: [{ label: 'Update the plugin', command: '/plugin', kind: 'slash' }],
+  })
+  // the press comes in as /deck-1, a command.run hook: /plugin must wait for it to return
+  await $.command.run({ command: 'deck-1', args: '' })
+  expect(ran).toEqual([])
+  await clock.advance(0)
+  expect(ran).toEqual(['/plugin'])
 })

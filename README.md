@@ -86,9 +86,9 @@ Set in `/config` or at install time:
 - `claude plugin test .` runs the tests (no package.json); `claude plugin validate .` checks the
   manifest. Timers in tests need `mock.clock(on)` and `clock.advance(0)` from `claude-code/testing`.
 - A digit press arrives as a `/deck-N` `command.run` hook. The engine refuses `$.prompt.submit`
-  from inside one (the hook holds the turn), so a row that submits (send, a reply, a pick-one that
-  sends) is deferred with `$.clock.after(0, …)` (`submitsOnPress`, since 0.9.2; auto-continue since
-  0.9.4).
+  and `$.command.run` from inside one (the hook holds the turn), so a row that submits (send, a
+  reply, a pick-one that sends) or runs a slash command is deferred with `$.clock.after(0, …)`
+  (`defersPress`; submits since 0.9.2, slash rows since 0.9.10; auto-continue since 0.9.4).
 - A running session keeps the plugin version it started with: after an update, a long-running
   session still has the old code until it is resumed (`claude --resume <id>`).
 
